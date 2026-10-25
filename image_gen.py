@@ -16,10 +16,12 @@ RED = (235, 30, 50)
 WHITE = (255, 255, 255)
 XP_PER_LEVEL = 6000
 
+# ── Настройки скорости ─────────────────────────────────────────────
 OUT_FORMAT = "JPEG"   # "JPEG" — быстро и в 5–8 раз легче; "PNG" — без потерь, но медленнее
 OUT_SCALE = 1.0       # 0.75 → итоговая картинка 1440x810, ещё быстрее и легче
 OUT_EXT = "jpg" if OUT_FORMAT == "JPEG" else "png"
 AVATAR_CACHE_SIZE = 256
+# ───────────────────────────────────────────────────────────────────
 
 _lock = threading.Lock()
 _bg_cache = {"key": None, "img": None}
@@ -72,6 +74,7 @@ async def _get_avatar_bytes(user):
         _avatar_cache.move_to_end(key)
         return _avatar_cache[key]
 
+    # webp в разы легче png; для анимированных берём png (статичный первый кадр)
     fmt = "png" if asset.is_animated() else "webp"
     try:
         data = await asset.replace(size=512, format=fmt).read()
@@ -93,6 +96,7 @@ def _render(bg_path, avatar_bytes, name, data, rank):
     f_reg = _font(FONT_REG, 24)
     f_small = _font(FONT_REG, 20)
 
+    # ═════════════ ЛЕВАЯ ПАНЕЛЬ ═════════════
     AV = 290
     avatar = Image.open(io.BytesIO(avatar_bytes)).convert("RGB").resize((AV, AV), Image.Resampling.LANCZOS)
     bg.paste(avatar, (384 - AV // 2, 385 - AV // 2), _circle_mask(AV))
@@ -110,21 +114,24 @@ def _render(bg_path, avatar_bytes, name, data, rank):
     if fill_w > bar_h:
         draw.rounded_rectangle((bar_x, bar_y, bar_x + fill_w, bar_y + bar_h), radius=5, fill=RED)
 
-
+    # Закрываем надпись "/ 100" из шаблона кусочком фона и пишем свою
     patch = bg.crop((590, 874, 656, 900))
     bg.paste(patch, (590, 832))
     draw.text((647, 845), f"{current_xp} / {XP_PER_LEVEL}", font=f_small, fill=WHITE, anchor="rm")
 
+    # ═════════════ ПРАВАЯ ВЕРХНЯЯ ПАНЕЛЬ ═════════════
     VAL_Y = 548
     draw.text((935, VAL_Y), str(data.get("messages", 0)), font=f_big, fill=RED, anchor="lm")
     vt = data.get("voice_time", 0)
     draw.text((1313, VAL_Y), f"{vt // 3600}ч {(vt % 3600) // 60}м", font=f_big, fill=RED, anchor="lm")
     draw.text((1680, VAL_Y), rank, font=f_big, fill=RED, anchor="lm")
 
+    # ═════════════ ПРАВАЯ НИЖНЯЯ ПАНЕЛЬ ═════════════
     ECO_Y = 880
     draw.text((950, ECO_Y), f"{data.get('salary', 0):,}".replace(",", " "), font=f_big, fill=RED, anchor="lm")
     draw.text((1465, ECO_Y), f"{data.get('points', 0):,}".replace(",", " "), font=f_big, fill=WHITE, anchor="lm")
 
+    # ═════════════ СОХРАНЕНИЕ ═════════════
     if OUT_SCALE != 1.0:
         bg = bg.resize((int(W * OUT_SCALE), int(H * OUT_SCALE)), Image.Resampling.LANCZOS)
     out = io.BytesIO()
