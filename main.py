@@ -42,14 +42,13 @@ async def setup_hook():
 async def on_ready():
     global _synced
     print(f"\n✅ Бот авторизован: {bot.user} (ID: {bot.user.id})")
-    if _synced:  # on_ready может сработать повторно при переподключении
+    if _synced:
         return
     _synced = True
 
     for guild in bot.guilds:
         await sync_guild(guild)
 
-    # Убираем глобальные дубликаты (серверные копии уже отправлены выше)
     try:
         bot.tree.clear_commands(guild=None)
         await bot.tree.sync()
@@ -74,4 +73,4 @@ if __name__ == "__main__":
     except Exception:
         traceback.print_exc()
     finally:
-        storage.flush()  # сохраняем всё, что не успело записаться
+        storage.flush()

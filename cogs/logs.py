@@ -61,7 +61,6 @@ class LogsCog(commands.Cog):
         """Не логируем сами лог-каналы, иначе получится бесконечный цикл."""
         return channel_id in get_settings().values()
 
-    # ═══════════════ СООБЩЕНИЯ ═══════════════
     @commands.Cog.listener()
     async def on_raw_message_delete(self, payload: discord.RawMessageDeleteEvent):
         if not payload.guild_id or self._is_log_channel(payload.channel_id):
@@ -79,7 +78,6 @@ class LogsCog(commands.Cog):
                 e.add_field(name="Вложения", value=trim("\n".join(a.filename for a in msg.attachments)), inline=False)
             e.set_thumbnail(url=msg.author.display_avatar.url)
 
-            # Если удалил не автор, в журнале аудита будет запись о модераторе
             await asyncio.sleep(1)
             entry = await find_audit(msg.guild, discord.AuditLogAction.message_delete,
                                      msg.author.id, within=10, channel_id=payload.channel_id)
@@ -109,7 +107,7 @@ class LogsCog(commands.Cog):
         before = payload.cached_message
         if before is not None:
             if before.content == after.content:
-                return  # поменялось что-то кроме текста (например, подгрузился предпросмотр ссылки)
+                return 
         elif not payload.data.get("edited_timestamp"):
             return
 
@@ -124,14 +122,12 @@ class LogsCog(commands.Cog):
         e.set_footer(text=f"ID сообщения: {after.id}")
         await send_log(self.bot, "message_log", e)
 
-    # ═══════════════ ВОЙС ═══════════════
     @commands.Cog.listener()
     async def on_voice_state_update(self, member: discord.Member, before: discord.VoiceState,
                                     after: discord.VoiceState):
         if member.bot:
             return
 
-        # Вход / выход / переход
         if before.channel != after.channel:
             if before.channel is None:
                 title, color = "🟢 Вход в голосовой канал", GREEN
@@ -147,7 +143,6 @@ class LogsCog(commands.Cog):
             e.set_footer(text=f"ID: {member.id}")
             await send_log(self.bot, "voice_log", e)
 
-        # Серверный мут / глухота (выдаёт модератор, поэтому уходит в канал модерации)
         for attr, on_title, off_title in (
             ("mute", "🔇 Серверный мут микрофона", "🔊 Серверный мут снят"),
             ("deaf", "🙉 Серверная глухота", "👂 Серверная глухота снята"),
@@ -160,7 +155,6 @@ class LogsCog(commands.Cog):
             e = mod_embed(on_title if now_ else off_title, RED if now_ else GREEN, member, entry)
             await send_log(self.bot, "mod_log", e)
 
-    # ═══════════════ БАНЫ / КИКИ / МУТЫ ═══════════════
     @commands.Cog.listener()
     async def on_member_ban(self, guild: discord.Guild, user: discord.User):
         await asyncio.sleep(1)
@@ -175,7 +169,6 @@ class LogsCog(commands.Cog):
 
     @commands.Cog.listener()
     async def on_member_remove(self, member: discord.Member):
-        # Обычные выходы с сервера не логируем, только кики
         await asyncio.sleep(1)
         entry = await find_audit(member.guild, discord.AuditLogAction.kick, member.id)
         if entry is None:

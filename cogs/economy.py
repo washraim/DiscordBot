@@ -10,9 +10,9 @@ from storage import (
 from helpers import is_curator, is_responsible
 from image_gen import generate_profile_card, warm_up, OUT_EXT
 
-XP_COOLDOWN = 30        # сек: не чаще, чем раз в 30 сек даём XP и счётчик на баллы
+XP_COOLDOWN = 30
 XP_PER_MESSAGE = 15
-VOICE_TICK = 300        # сек
+VOICE_TICK = 300
 
 
 class EconomyCog(commands.Cog):
@@ -23,7 +23,6 @@ class EconomyCog(commands.Cog):
         self.voice_loop.start()
 
     async def cog_load(self):
-        # Прогреваем фон и шрифты при старте, чтобы первый /profile не тормозил
         await asyncio.to_thread(warm_up, BG_PATH)
 
     def cog_unload(self):
@@ -35,11 +34,8 @@ class EconomyCog(commands.Cog):
         uid = message.author.id
         now = time.monotonic()
 
-        # Персонал (владелец, кураторы, ответственные) получает статистику и XP,
-        # но не получает баллы: им платят ЗП
         staff = is_responsible(message.author)
 
-        # Сообщение считаем всегда, а XP и баллы только с кулдауном (защита от спама)
         if now - self._last_xp.get(uid, 0) < XP_COOLDOWN:
             add_stats(uid, messages=1)
             return
@@ -59,7 +55,7 @@ class EconomyCog(commands.Cog):
             afk = guild.afk_channel
             for vc in guild.voice_channels:
                 if afk and vc.id == afk.id:
-                    continue  # AFK-канал не считаем
+                    continue
                 for m in vc.members:
                     v = m.voice
                     if m.bot or not v or v.self_deaf or v.deaf:
@@ -74,7 +70,6 @@ class EconomyCog(commands.Cog):
         await inter.response.defer()
         m = member or inter.user
         u = get_user(m.id)
-        # Полный рейтинг по времени в войсе (без обрезки), чтобы место считалось для всех
         top_users = sorted(all_users().items(), key=lambda x: x[1].get("voice_time", 0), reverse=True)
 
         try:
@@ -116,7 +111,6 @@ async def setup(bot):
     await bot.add_cog(EconomyCog(bot))
 
 
-# ═══════════════ КАРТОЧКА БАЛАНСА ═══════════════
 class BalanceView(discord.ui.LayoutView):
     def __init__(self, member: discord.Member, points: int, salary: int):
         super().__init__(timeout=None)
@@ -140,7 +134,6 @@ class BalanceView(discord.ui.LayoutView):
         self.add_item(container)
 
 
-# ═══════════════ МАГАЗИН ═══════════════
 async def _reply(inter: discord.Interaction, msg: str):
     """Ответить правильно и до, и после первого ответа на interaction."""
     if inter.response.is_done():
@@ -187,7 +180,7 @@ async def process_purchase(inter: discord.Interaction, item, details):
         try:
             await ch.send(embed=e)
         except discord.HTTPException:
-            pass  # не удалось написать в лог, но покупка уже прошла
+            pass
 
     await _reply(inter, f"✅ Куплено: **{item['name']}**\n📝 Заказ: {details}")
 

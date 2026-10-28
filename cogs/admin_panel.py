@@ -13,7 +13,6 @@ LEVELS = {
     "responsible": ("🛡️", "Ответственный"),
 }
 
-# (ключ настройки, полное название, короткое для кнопки, эмоджи)
 CHANNELS = [
     ("purchase_log", "Канал покупок",   "Покупки",   "📢"),
     ("mod_log",      "Канал модерации", "Модерация", "⚖️"),
@@ -22,12 +21,11 @@ CHANNELS = [
     ("voice_log",    "Канал войса",     "Войс",      "🎙️"),
 ]
 ROLES = [
-    ("builder_role", "Роль строителей", "Строители", "🏗️"),
-    ("tester_role",  "Роль тестеров",   "Тестеры",   "🧪"),
+    ("builder_role", "Роль строителей", "Строители"),
+    ("tester_role",  "Роль тестеров",   "Тестеры"),
 ]
 
 
-# ═══════════════ ПЛАШКА ═══════════════
 def _chan(guild, cid):
     if not cid:
         return "`не задан`"
@@ -56,7 +54,7 @@ def build_embed(guild: discord.Guild, user: discord.abc.User) -> discord.Embed:
     total_salary = sum(u.get("salary", 0) for u in users.values())
 
     e = discord.Embed(
-        title="🎛️ Панель управления",
+        title="Панель управления",
         description=(
             "Доступна **только владельцу**.\n"
             "Каналы логов, роли веток и должности персонала.\n"
@@ -71,7 +69,7 @@ def build_embed(guild: discord.Guild, user: discord.abc.User) -> discord.Embed:
         e.set_thumbnail(url=guild.icon.url)
 
     e.add_field(
-        name="📡 Каналы логов",
+        name="Каналы логов",
         value="\n".join(f"{emoji} **{short}:** {_chan(guild, s[key])}"
                         for key, _, short, emoji in CHANNELS),
         inline=True)
@@ -81,7 +79,7 @@ def build_embed(guild: discord.Guild, user: discord.abc.User) -> discord.Embed:
                         for key, _, short, emoji in ROLES),
         inline=True)
     e.add_field(
-        name="📊 Данные",
+        name="Данные",
         value=f"**Участников:** `{len(users)}`\n"
               f"**Товаров:** `{len(get_shop())}`\n"
               f"**ЗП на руках:** `{total_salary:,}`".replace(",", " "),
@@ -94,7 +92,6 @@ def build_embed(guild: discord.Guild, user: discord.abc.User) -> discord.Embed:
     return e
 
 
-# ═══════════════ КОМАНДА ═══════════════
 class AdminPanelCog(commands.Cog):
     def __init__(self, bot): self.bot = bot
 
@@ -111,7 +108,6 @@ async def setup(bot):
     await bot.add_cog(AdminPanelCog(bot))
 
 
-# ═══════════════ БАЗА: только владелец ═══════════════
 class OwnerView(discord.ui.View):
     async def interaction_check(self, i: discord.Interaction) -> bool:
         if not is_owner(i.user):
@@ -120,7 +116,6 @@ class OwnerView(discord.ui.View):
         return True
 
 
-# ═══════════════ ВЫБОР КАНАЛА / РОЛИ ═══════════════
 class ChannelPick(OwnerView):
     def __init__(self, key, title, panel):
         super().__init__(timeout=60)
@@ -175,7 +170,6 @@ class RolePick(OwnerView):
         await self.panel.refresh()
 
 
-# ═══════════════ ВЫДАЧА / СНЯТИЕ ДОЛЖНОСТЕЙ ═══════════════
 class GrantView(OwnerView):
     def __init__(self, level, panel):
         super().__init__(timeout=60)
@@ -209,7 +203,6 @@ class GrantView(OwnerView):
         await self.panel.refresh()
 
 
-# ═══════════════ ГЛАВНАЯ ПАНЕЛЬ ═══════════════
 class SettingButton(discord.ui.Button):
     def __init__(self, key, title, short, emoji, kind, row):
         super().__init__(label=short, emoji=emoji, row=row,

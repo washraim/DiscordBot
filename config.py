@@ -1,9 +1,6 @@
 import os
 from pathlib import Path
 
-# Токен берём из переменной окружения DISCORD_TOKEN (или из файла .env рядом с ботом).
-# Файл .env:  DISCORD_TOKEN=твой_новый_токен
-# Для .env нужен пакет:  pip install python-dotenv
 try:
     from dotenv import load_dotenv
     load_dotenv()
@@ -22,7 +19,6 @@ SHOP_F     = DATA / "shop.json"
 STAFF_F    = DATA / "staff.json"
 SETTINGS_F = DATA / "settings.json"
 
-# Ресурсы для карточки профиля (лежат рядом с config.py)
 BG_PATH   = BASE_DIR / "bg.png"
 FONT_BOLD = BASE_DIR / "Montserrat-Bold.ttf"
 FONT_REG  = BASE_DIR / "Montserrat-Regular.ttf"

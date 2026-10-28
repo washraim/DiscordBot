@@ -65,6 +65,5 @@ class WarnModal(discord.ui.Modal, title="Выдать выговор"):
         e.add_field(name="Всего", value=str(u["warnings"]), inline=True)
         e.add_field(name="Причина", value=self.w_reason.value, inline=False)
         await inter.response.send_message(embed=e)
-        # В лог-канал, если он не совпадает с каналом, где вызвана команда (чтобы не дублировать)
         if get_settings().get("mod_log") != inter.channel_id:
             await send_log(inter.client, "mod_log", e)

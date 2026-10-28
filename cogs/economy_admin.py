@@ -12,7 +12,6 @@ GREEN = 0x2ECC71
 
 CURRENCY = {"points": "баллов", "salary": "ЗП"}
 
-# Все четыре операции описаны данными
 ACTIONS = {
     "add_points":    {"icon": "➕", "title": "Выдать баллы",  "field": "points", "give": True,  "color": GREEN},
     "remove_points": {"icon": "➖", "title": "Забрать баллы", "field": "points", "give": False, "color": RED},
@@ -25,7 +24,6 @@ def num(v: int) -> str:
     return f"{v:,}".replace(",", " ")
 
 
-# ═══════════════ ПЛАШКА ═══════════════
 def build_panel(user) -> discord.Embed:
     users = all_users()
     total_points = sum(u.get("points", 0) for u in users.values())
@@ -54,7 +52,6 @@ def build_panel(user) -> discord.Embed:
     return e
 
 
-# ═══════════════ ЛОГ ═══════════════
 async def log_op(client, action_key, curator, target, amount, reason, balance_after, note=None):
     cfg = ACTIONS[action_key]
     e = discord.Embed(title=f"{cfg['icon']} {cfg['title']}", color=cfg["color"], timestamp=discord.utils.utcnow())
@@ -68,7 +65,6 @@ async def log_op(client, action_key, curator, target, amount, reason, balance_af
     await send_log(client, "pay_log", e)
 
 
-# ═══════════════ БАЗА: только кураторы ═══════════════
 class CuratorView(discord.ui.View):
     async def interaction_check(self, i: discord.Interaction) -> bool:
         if not is_curator(i.user):
@@ -77,7 +73,6 @@ class CuratorView(discord.ui.View):
         return True
 
 
-# ═══════════════ ВЫБОР УЧАСТНИКА → СУММА ═══════════════
 class AmountModal(discord.ui.Modal):
     def __init__(self, action_key, target, panel):
         cfg = ACTIONS[action_key]
@@ -121,7 +116,7 @@ class AmountModal(discord.ui.Modal):
                 return await i.response.send_message(
                     f"❌ У {t.mention} только **{num(have)}** баллов.", ephemeral=True)
             text = f"✅ −{num(amt)} баллов у {t.mention}"
-        else:  # remove_salary
+        else:  
             if remove_salary(t.id, amt) is None:
                 have = get_user(t.id)["salary"]
                 return await i.response.send_message(
@@ -147,7 +142,6 @@ class TargetPick(CuratorView):
         await i.response.send_modal(AmountModal(self.action_key, target, self.panel))
 
 
-# ═══════════════ ОБНУЛЕНИЕ ЗП ═══════════════
 class ResetBranchView(CuratorView):
     def __init__(self, panel):
         super().__init__(timeout=60)
@@ -197,7 +191,6 @@ class ConfirmResetView(CuratorView):
         self.stop()
 
 
-# ═══════════════ ГЛАВНОЕ МЕНЮ ═══════════════
 class ActionButton(discord.ui.Button):
     def __init__(self, action_key, row):
         cfg = ACTIONS[action_key]

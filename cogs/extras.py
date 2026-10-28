@@ -9,7 +9,6 @@ from image_gen import XP_PER_LEVEL
 RED = 0x9B111E
 MEDALS = {1: "🥇", 2: "🥈", 3: "🥉"}
 
-# Комиссия на переводы в процентах (0 = без комиссии)
 FEE_PERCENT = {"points": 0, "salary": 0}
 CURRENCY_NAMES = {"points": "баллов", "salary": "ЗП"}
 
@@ -18,14 +17,12 @@ def num(v: int) -> str:
     return f"{v:,}".replace(",", " ")
 
 
-# ═══════════════ /top ═══════════════
 def _fmt_voice(u):  return f"{u['voice_time'] // 3600}ч {(u['voice_time'] % 3600) // 60}м"
 def _fmt_msgs(u):   return num(u["messages"])
 def _fmt_level(u):  return f"{u['xp'] // XP_PER_LEVEL + 1} LVL · {num(u['xp'])} XP"
 def _fmt_points(u): return num(u["points"])
 def _fmt_salary(u): return num(u["salary"])
 
-# ключ -> (эмоджи, название, поле для сортировки, форматтер)
 CATS = {
     "voice":    ("🎙️", "Войс",       "voice_time", _fmt_voice),
     "messages": ("💬", "Сообщения",  "messages",   _fmt_msgs),
@@ -106,7 +103,6 @@ class TopView(discord.ui.View):
             pass
 
 
-# ═══════════════ /help ═══════════════
 def build_help_embed(user) -> discord.Embed:
     e = discord.Embed(
         title="📖 Справка по боту",
@@ -158,7 +154,6 @@ def build_help_embed(user) -> discord.Embed:
     return e
 
 
-# ═══════════════ КОГ ═══════════════
 class ExtrasCog(commands.Cog):
     def __init__(self, bot): self.bot = bot
 
@@ -208,7 +203,6 @@ class ExtrasCog(commands.Cog):
         e.set_thumbnail(url=member.display_avatar.url)
         await inter.response.send_message(content=member.mention, embed=e)
 
-        # Лог перевода (не дублируем, если канал логов совпадает с каналом команды)
         if get_settings().get("pay_log") != inter.channel_id:
             log = discord.Embed(title="💸 Перевод", color=RED, timestamp=discord.utils.utcnow())
             log.add_field(name="От", value=f"{inter.user.mention}\n`{inter.user.id}`", inline=True)
