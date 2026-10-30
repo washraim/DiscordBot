@@ -5,7 +5,7 @@ from storage import (
     get_settings, set_setting, get_staff, set_staff, del_staff, all_users, get_shop
 )
 from helpers import is_owner
-from config import OWNER_ID
+from config import OWNER_ID, PERMS_OWNER
 
 RED = 0x9B111E
 LEVELS = {
@@ -13,6 +13,7 @@ LEVELS = {
     "responsible": ("🛡️", "Ответственный"),
 }
 
+# (ключ настройки, полное название, короткое для кнопки, эмоджи)
 CHANNELS = [
     ("purchase_log", "Канал покупок",   "Покупки",   "📢"),
     ("mod_log",      "Канал модерации", "Модерация", "⚖️"),
@@ -23,9 +24,13 @@ CHANNELS = [
 ROLES = [
     ("builder_role", "Роль строителей", "Строители", "🏗️"),
     ("tester_role",  "Роль тестеров",   "Тестеры",   "🧪"),
+    # Discord-роли должностей: выдаются автоматически при назначении и дают видимость команд
+    ("curator_role",     "Роль кураторов",      "Кураторы",      "👑"),
+    ("responsible_role", "Роль ответственных",  "Ответственные", "🛡️"),
 ]
 
 
+# ═══════════════ ПЛАШКА ═══════════════
 def _chan(guild, cid):
     if not cid:
         return "`не задан`"
@@ -54,7 +59,7 @@ def build_embed(guild: discord.Guild, user: discord.abc.User) -> discord.Embed:
     total_salary = sum(u.get("salary", 0) for u in users.values())
 
     e = discord.Embed(
-        title="Панель управления",
+        title="🎛️ Панель управления",
         description=(
             "Доступна **только владельцу**.\n"
             "Каналы логов, роли веток и должности персонала.\n"
@@ -69,7 +74,7 @@ def build_embed(guild: discord.Guild, user: discord.abc.User) -> discord.Embed:
         e.set_thumbnail(url=guild.icon.url)
 
     e.add_field(
-        name="Каналы логов",
+        name="📡 Каналы логов",
         value="\n".join(f"{emoji} **{short}:** {_chan(guild, s[key])}"
                         for key, _, short, emoji in CHANNELS),
         inline=True)
@@ -79,7 +84,7 @@ def build_embed(guild: discord.Guild, user: discord.abc.User) -> discord.Embed:
                         for key, _, short, emoji in ROLES),
         inline=True)
     e.add_field(
-        name="Данные",
+        name="📊 Данные",
         value=f"**Участников:** `{len(users)}`\n"
               f"**Товаров:** `{len(get_shop())}`\n"
               f"**ЗП на руках:** `{total_salary:,}`".replace(",", " "),
@@ -92,11 +97,13 @@ def build_embed(guild: discord.Guild, user: discord.abc.User) -> discord.Embed:
     return e
 
 
+# ═══════════════ КОМАНДА ═══════════════
 class AdminPanelCog(commands.Cog):
     def __init__(self, bot): self.bot = bot
 
     @app_commands.command(name="admin", description="Панель управления ботом (только владелец)")
     @app_commands.guild_only()
+    @app_commands.default_permissions(**PERMS_OWNER)
     async def admin_cmd(self, inter: discord.Interaction):
         if not is_owner(inter.user):
             return await inter.response.send_message("❌ Только владелец.", ephemeral=True)
@@ -108,6 +115,7 @@ async def setup(bot):
     await bot.add_cog(AdminPanelCog(bot))
 
 
+# ═══════════════ БАЗА: только владелец ═══════════════
 class OwnerView(discord.ui.View):
     async def interaction_check(self, i: discord.Interaction) -> bool:
         if not is_owner(i.user):
@@ -116,6 +124,7 @@ class OwnerView(discord.ui.View):
         return True
 
 
+# ═══════════════ ВЫБОР КАНАЛА / РОЛИ ═══════════════
 class ChannelPick(OwnerView):
     def __init__(self, key, title, panel):
         super().__init__(timeout=60)
@@ -170,6 +179,37 @@ class RolePick(OwnerView):
         await self.panel.refresh()
 
 
+# ═══════════════ ВЫДАЧА / СНЯТИЕ ДОЛЖНОСТЕЙ ═══════════════
+async def sync_staff_role(guild: discord.Guild, user, new_level):
+    """Выдаёт Discord-роль должности и снимает ненужную. Возвращает примечание для ответа."""
+    s = get_settings()
+    mapping = {"curator": s.get("curator_role"), "responsible": s.get("responsible_role")}
+    member = guild.get_member(user.id)
+    if member is None:
+        return "\n⚠️ Участник не найден на сервере, Discord-роль не выдана."
+
+    notes, problem, configured = [], False, False
+    for level, rid in mapping.items():
+        role = guild.get_role(rid) if rid else None
+        if role is None:
+            continue
+        configured = True
+        try:
+            if level == new_level and role not in member.roles:
+                await member.add_roles(role, reason="Должность из /admin")
+            elif level != new_level and role in member.roles:
+                await member.remove_roles(role, reason="Должность из /admin")
+        except discord.HTTPException:
+            problem = True
+    if problem:
+        notes.append("⚠️ Discord-роль выдать не удалось: проверьте право «Управление ролями» "
+                     "и что роль бота выше ролей должностей.")
+    if new_level and not configured:
+        notes.append("ℹ️ Discord-роли должностей не привязаны в панели: команды в списке "
+                     "у участника не появятся.")
+    return ("\n" + "\n".join(notes)) if notes else ""
+
+
 class GrantView(OwnerView):
     def __init__(self, level, panel):
         super().__init__(timeout=60)
@@ -198,11 +238,14 @@ class GrantView(OwnerView):
             set_staff(target.id, self.level)
             was = f" (было: {LEVELS[current][1]})" if current in LEVELS else ""
             msg = f"✅ {target.mention} → {emoji} **{name}**{was}"
-        await i.response.edit_message(content=msg, view=None)
+        await i.response.defer()
+        note = await sync_staff_role(i.guild, target, self.level)
+        await i.edit_original_response(content=msg + note, view=None)
         self.stop()
         await self.panel.refresh()
 
 
+# ═══════════════ ГЛАВНАЯ ПАНЕЛЬ ═══════════════
 class SettingButton(discord.ui.Button):
     def __init__(self, key, title, short, emoji, kind, row):
         super().__init__(label=short, emoji=emoji, row=row,

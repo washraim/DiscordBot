@@ -6,7 +6,7 @@ from bot_instance import bot
 import config
 import storage
 
-COGS = ["cogs.economy", "cogs.moderation", "cogs.economy_admin", "cogs.admin_panel", "cogs.extras", "cogs.logs"]
+COGS = ["cogs.economy", "cogs.moderation", "cogs.economy_admin", "cogs.admin_panel", "cogs.extras", "cogs.logs", "cogs.shop"]
 _synced = False
 
 
@@ -42,13 +42,14 @@ async def setup_hook():
 async def on_ready():
     global _synced
     print(f"\n✅ Бот авторизован: {bot.user} (ID: {bot.user.id})")
-    if _synced:
+    if _synced:  # on_ready может сработать повторно при переподключении
         return
     _synced = True
 
     for guild in bot.guilds:
         await sync_guild(guild)
 
+    # Убираем глобальные дубликаты (серверные копии уже отправлены выше)
     try:
         bot.tree.clear_commands(guild=None)
         await bot.tree.sync()
@@ -73,4 +74,4 @@ if __name__ == "__main__":
     except Exception:
         traceback.print_exc()
     finally:
-        storage.flush()
+        storage.flush()  # сохраняем всё, что не успело записаться

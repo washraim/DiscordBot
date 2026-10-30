@@ -2,6 +2,7 @@ import discord
 from discord.ext import commands
 from discord import app_commands
 from storage import get_user, set_user, add_warning, get_settings
+from config import PERMS_CURATOR, PERMS_RESPONSIBLE
 from helpers import is_curator, is_responsible, is_owner, send_log
 
 RED = 0x9B111E
@@ -12,6 +13,7 @@ class ModerationCog(commands.Cog):
     def __init__(self, bot): self.bot = bot
 
     @app_commands.command(name="warn", description="Выговор")
+    @app_commands.default_permissions(**PERMS_RESPONSIBLE)
     async def warn_cmd(self, inter: discord.Interaction, member: discord.Member):
         if not is_responsible(inter.user): return await inter.response.send_message("❌ Нет прав.", ephemeral=True)
         if member.bot: return await inter.response.send_message("❌ Нельзя выдать выговор боту.", ephemeral=True)
@@ -28,6 +30,7 @@ class ModerationCog(commands.Cog):
         await inter.response.send_message(embed=e, ephemeral=True)
 
     @app_commands.command(name="warn_clear", description="Снять выговор (куратор)")
+    @app_commands.default_permissions(**PERMS_CURATOR)
     async def warn_clear_cmd(self, inter: discord.Interaction, member: discord.Member):
         if not is_curator(inter.user): return await inter.response.send_message("❌ Нет прав.", ephemeral=True)
         if member.id == inter.user.id:
@@ -65,5 +68,6 @@ class WarnModal(discord.ui.Modal, title="Выдать выговор"):
         e.add_field(name="Всего", value=str(u["warnings"]), inline=True)
         e.add_field(name="Причина", value=self.w_reason.value, inline=False)
         await inter.response.send_message(embed=e)
+        # В лог-канал, если он не совпадает с каналом, где вызвана команда (чтобы не дублировать)
         if get_settings().get("mod_log") != inter.channel_id:
             await send_log(inter.client, "mod_log", e)

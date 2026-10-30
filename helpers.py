@@ -9,6 +9,15 @@ def is_responsible(m):
     return get_staff().get(str(m.id)) in ("curator", "responsible")
 
 
+def is_staff(m):
+    """Персонал: владелец, кураторы, ответственные, а также роли строителей и тестеров."""
+    if is_responsible(m):
+        return True
+    s = get_settings()
+    ids = {s.get("builder_role"), s.get("tester_role")} - {None}
+    return any(r.id in ids for r in getattr(m, "roles", []))
+
+
 async def send_log(client, key, embed):
     """Отправить embed в канал логов, заданный в /admin под ключом key. Ошибки не пробрасываем."""
     ch_id = get_settings().get(key)
