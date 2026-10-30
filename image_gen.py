@@ -10,13 +10,13 @@ import discord
 from PIL import Image, ImageDraw, ImageFont
 from config import FONT_BOLD, FONT_REG
 
-W, H = 1920, 1080          # координаты в коде рассчитаны на этот размер
+W, H = 1920, 1080      
 RED = (235, 30, 50)
 WHITE = (255, 255, 255)
 XP_PER_LEVEL = 6000
 
-OUT_FORMAT = "JPEG"   # "JPEG" — быстро и в 5–8 раз легче; "PNG" — без потерь, но медленнее
-OUT_SCALE = 1.0       # 0.75 → итоговая картинка 1440x810, ещё быстрее и легче
+OUT_FORMAT = "JPEG" 
+OUT_SCALE = 1.0      
 OUT_EXT = "jpg" if OUT_FORMAT == "JPEG" else "png"
 AVATAR_CACHE_SIZE = 256
 

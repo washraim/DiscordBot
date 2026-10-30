@@ -16,11 +16,9 @@ CURRENCY = {
     "points": {"emoji": "🪙", "name": "баллов"},
     "salary": {"emoji": "💵", "name": "ЗП"},
 }
-# Валюта новых товаров по умолчанию (можно указать другую при добавлении)
 DEFAULT_CURRENCY = {"players": "points", "staff": "salary"}
-# Может ли персонал заходить ещё и в магазин игроков
 STAFF_CAN_USE_PLAYER_SHOP = True
-MAX_ITEMS_PER_SHOP = 25  # лимит выпадающего меню Discord
+MAX_ITEMS_PER_SHOP = 25 
 
 CUR_ALIASES = {
     "баллы": "points", "балл": "points", "баллов": "points", "points": "points",
@@ -50,7 +48,6 @@ def allowed_shops(member):
     return ["players"]
 
 
-# ═══════════════ ПЛАШКА МАГАЗИНА ═══════════════
 def build_shop_embed(member, shop_key) -> discord.Embed:
     meta = SHOPS[shop_key]
     items = items_of(shop_key)
@@ -147,7 +144,6 @@ class ShopView(discord.ui.View):
             pass
 
 
-# ═══════════════ ПОКУПКА ═══════════════
 async def _reply(inter: discord.Interaction, msg: str):
     if inter.response.is_done():
         await inter.followup.send(msg, ephemeral=True)
@@ -191,7 +187,6 @@ class PurchaseModal(discord.ui.Modal):
         await process_purchase(inter, self.item, self.det.value, self.panel)
 
 
-# ═══════════════ УПРАВЛЕНИЕ (куратор) ═══════════════
 def build_admin_embed() -> discord.Embed:
     e = discord.Embed(
         title="🛠️ Управление магазинами",

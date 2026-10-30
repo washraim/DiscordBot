@@ -11,8 +11,6 @@ DEFAULT_SETTINGS = {
     "curator_role": None, "responsible_role": None,
 }
 
-# Данные живут в памяти. users.json сбрасывается на диск через flush()
-# (раз в 30 сек из main.py и при остановке бота), остальные файлы пишутся сразу.
 _cache = {}
 _dirty = set()
 
@@ -24,7 +22,6 @@ def _read(f):
     except FileNotFoundError:
         return {}
     except Exception as e:
-        # Файл битый: не затираем его пустотой, а откладываем в сторону.
         backup = f"{f}.corrupt-{int(time.time())}"
         try:
             os.replace(f, backup)
@@ -63,7 +60,6 @@ def flush():
         _dirty.discard(key)
 
 
-# ───────────── пользователи ─────────────
 def get_user(uid):
     """Копия данных пользователя; недостающие поля добиваются значениями по умолчанию."""
     return {**DEFAULT_USER, **_data(USERS_F).get(str(uid), {})}
@@ -151,7 +147,6 @@ def reset_salary(uids):
     return count
 
 
-# ───────────── настройки ─────────────
 def get_settings():
     return {**DEFAULT_SETTINGS, **_data(SETTINGS_F)}
 
@@ -161,7 +156,6 @@ def set_setting(k, v):
     _commit(SETTINGS_F)
 
 
-# ───────────── персонал ─────────────
 def get_staff():
     return _data(STAFF_F)
 
@@ -176,7 +170,6 @@ def del_staff(uid):
     _commit(STAFF_F)
 
 
-# ───────────── магазин ─────────────
 def get_shop():
     return _data(SHOP_F)
 
