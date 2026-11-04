@@ -102,6 +102,7 @@ class TopView(discord.ui.View):
         except discord.HTTPException:
             pass
 
+
 def build_help_embed(user) -> discord.Embed:
     e = discord.Embed(
         title="📖 Справка по боту",
@@ -116,7 +117,8 @@ def build_help_embed(user) -> discord.Embed:
             "`/top` — рейтинги сервера\n"
             "`/pay` — перевести баллы или ЗП\n"
             "`/shop` — магазин (игроков или персонала, в зависимости от роли)\n"
-            "`/warnings` — выговоры участника\n"
+            "`/warnings` — история выговоров участника\n"
+            "`/orders` — ваши заказы и их статусы\n"
             "`/help` — эта справка"
         ),
         inline=False,
@@ -137,8 +139,9 @@ def build_help_embed(user) -> discord.Embed:
         e.add_field(
             name="👑 Для кураторов",
             value=(
-                "`/adm_shop` — управление магазинами игроков и персонала\n"
-                "`/economy` — выдача и изъятие баллов и ЗП, обнуление ЗП\n"
+                "`/adm_shop` — магазины: товары, лимиты (заказы обрабатываются кнопками в канале покупок)\n"
+                "`/economy` — баллы и ЗП: выдача, изъятие, обнуление, ведомость\n"
+                "`/activity` — активность строителей и тестеров\n"
                 "`/warn_clear` — снять выговор (кроме себя)"
             ),
             inline=False,
@@ -151,6 +154,7 @@ def build_help_embed(user) -> discord.Embed:
         )
     e.set_footer(text="Ashra Team • Вместе сильнее")
     return e
+
 
 class ExtrasCog(commands.Cog):
     def __init__(self, bot): self.bot = bot

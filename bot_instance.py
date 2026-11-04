@@ -7,4 +7,4 @@ intents.members = True
 intents.voice_states = True
 intents.moderation = True
 
-bot = commands.Bot(command_prefix="!", intents=intents, max_messages=1000000)
+bot = commands.Bot(command_prefix="!", intents=intents, max_messages=10000)

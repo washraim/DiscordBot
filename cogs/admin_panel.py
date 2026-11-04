@@ -13,7 +13,6 @@ LEVELS = {
     "responsible": ("🛡️", "Ответственный"),
 }
 
-# (ключ настройки, полное название, короткое для кнопки, эмоджи)
 CHANNELS = [
     ("purchase_log", "Канал покупок",   "Покупки",   "📢"),
     ("mod_log",      "Канал модерации", "Модерация", "⚖️"),
@@ -24,13 +23,11 @@ CHANNELS = [
 ROLES = [
     ("builder_role", "Роль строителей", "Строители", "🏗️"),
     ("tester_role",  "Роль тестеров",   "Тестеры",   "🧪"),
-    # Discord-роли должностей: выдаются автоматически при назначении и дают видимость команд
     ("curator_role",     "Роль кураторов",      "Кураторы",      "👑"),
     ("responsible_role", "Роль ответственных",  "Ответственные", "🛡️"),
 ]
 
 
-# ═══════════════ ПЛАШКА ═══════════════
 def _chan(guild, cid):
     if not cid:
         return "`не задан`"
@@ -97,7 +94,6 @@ def build_embed(guild: discord.Guild, user: discord.abc.User) -> discord.Embed:
     return e
 
 
-# ═══════════════ КОМАНДА ═══════════════
 class AdminPanelCog(commands.Cog):
     def __init__(self, bot): self.bot = bot
 
@@ -115,7 +111,6 @@ async def setup(bot):
     await bot.add_cog(AdminPanelCog(bot))
 
 
-# ═══════════════ БАЗА: только владелец ═══════════════
 class OwnerView(discord.ui.View):
     async def interaction_check(self, i: discord.Interaction) -> bool:
         if not is_owner(i.user):
@@ -124,7 +119,6 @@ class OwnerView(discord.ui.View):
         return True
 
 
-# ═══════════════ ВЫБОР КАНАЛА / РОЛИ ═══════════════
 class ChannelPick(OwnerView):
     def __init__(self, key, title, panel):
         super().__init__(timeout=60)
@@ -179,9 +173,7 @@ class RolePick(OwnerView):
         await self.panel.refresh()
 
 
-# ═══════════════ ВЫДАЧА / СНЯТИЕ ДОЛЖНОСТЕЙ ═══════════════
 async def sync_staff_role(guild: discord.Guild, user, new_level):
-    """Выдаёт Discord-роль должности и снимает ненужную. Возвращает примечание для ответа."""
     s = get_settings()
     mapping = {"curator": s.get("curator_role"), "responsible": s.get("responsible_role")}
     member = guild.get_member(user.id)
@@ -245,7 +237,6 @@ class GrantView(OwnerView):
         await self.panel.refresh()
 
 
-# ═══════════════ ГЛАВНАЯ ПАНЕЛЬ ═══════════════
 class SettingButton(discord.ui.Button):
     def __init__(self, key, title, short, emoji, kind, row):
         super().__init__(label=short, emoji=emoji, row=row,

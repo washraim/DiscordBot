@@ -10,7 +10,6 @@ def is_responsible(m):
 
 
 def is_staff(m):
-    """Персонал: владелец, кураторы, ответственные, а также роли строителей и тестеров."""
     if is_responsible(m):
         return True
     s = get_settings()
@@ -19,7 +18,6 @@ def is_staff(m):
 
 
 async def send_log(client, key, embed):
-    """Отправить embed в канал логов, заданный в /admin под ключом key. Ошибки не пробрасываем."""
     ch_id = get_settings().get(key)
     if not ch_id:
         return

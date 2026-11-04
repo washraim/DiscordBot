@@ -1,4 +1,4 @@
-﻿import asyncio
+import asyncio
 import io
 import os
 import threading
@@ -10,13 +10,13 @@ import discord
 from PIL import Image, ImageDraw, ImageFont
 from config import FONT_BOLD, FONT_REG
 
-W, H = 1920, 1080      
+W, H = 1920, 1080
 RED = (235, 30, 50)
 WHITE = (255, 255, 255)
 XP_PER_LEVEL = 6000
 
-OUT_FORMAT = "JPEG" 
-OUT_SCALE = 1.0      
+OUT_FORMAT = "JPEG"
+OUT_SCALE = 1.0
 OUT_EXT = "jpg" if OUT_FORMAT == "JPEG" else "png"
 AVATAR_CACHE_SIZE = 256
 
@@ -35,14 +35,12 @@ def _font(path, size):
 
 @lru_cache(maxsize=8)
 def _circle_mask(size):
-    """Круглая маска со сглаженными краями (считается один раз для каждого размера)."""
     big = Image.new("L", (size * 4, size * 4), 0)
     ImageDraw.Draw(big).ellipse((0, 0, size * 4 - 1, size * 4 - 1), fill=255)
     return big.resize((size, size), Image.Resampling.LANCZOS)
 
 
 def _get_bg(bg_path):
-    """Фон декодируется и масштабируется один раз; перечитывается, только если bg.png изменили."""
     st = os.stat(bg_path)
     key = (str(bg_path), st.st_mtime_ns)
     with _lock:
@@ -53,7 +51,6 @@ def _get_bg(bg_path):
 
 
 def warm_up(bg_path):
-    """Прогрев при старте: первый /profile не тратит время на загрузку фона и шрифтов."""
     try:
         if Path(bg_path).is_file():
             _get_bg(bg_path)
@@ -64,7 +61,6 @@ def warm_up(bg_path):
 
 
 async def _get_avatar_bytes(user):
-    """Аватарки кэшируются по хэшу: при смене аватарки ключ меняется и скачивается новая."""
     asset = user.display_avatar
     key = (user.id, asset.key)
     if key in _avatar_cache:

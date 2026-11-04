@@ -23,7 +23,12 @@ BG_PATH   = BASE_DIR / "bg.png"
 FONT_BOLD = BASE_DIR / "Montserrat-Bold.ttf"
 FONT_REG  = BASE_DIR / "Montserrat-Regular.ttf"
 
+PERMS_OWNER       = {"administrator": True}
+PERMS_CURATOR     = {"manage_messages": True}
+PERMS_RESPONSIBLE = {"moderate_members": True}
 
-PERMS_OWNER       = {"administrator": True}     
-PERMS_CURATOR     = {"manage_messages": True}   
-PERMS_RESPONSIBLE = {"moderate_members": True}  
+ORDERS_F     = DATA / "orders.json"
+SALARY_LOG_F = DATA / "salary_log.json"
+WARNS_F      = DATA / "warns.json"
+
+WARN_EXPIRE_DAYS = 14

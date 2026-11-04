@@ -21,7 +21,6 @@ def now():
 
 
 async def find_audit(guild: discord.Guild, action, target_id, within=15, channel_id=None):
-    """Ищем свежую запись в журнале аудита, чтобы узнать модератора и причину."""
     me = guild.me
     if me is None or not me.guild_permissions.view_audit_log:
         return None
@@ -58,7 +57,6 @@ class LogsCog(commands.Cog):
     def __init__(self, bot): self.bot = bot
 
     def _is_log_channel(self, channel_id):
-        """Не логируем сами лог-каналы, иначе получится бесконечный цикл."""
         return channel_id in get_settings().values()
 
     @commands.Cog.listener()
@@ -107,7 +105,7 @@ class LogsCog(commands.Cog):
         before = payload.cached_message
         if before is not None:
             if before.content == after.content:
-                return 
+                return
         elif not payload.data.get("edited_timestamp"):
             return
 

@@ -1,9 +1,11 @@
+import datetime
+import time
 import discord
 from discord.ext import commands
 from discord import app_commands
 from storage import (
     get_user, add_points, remove_points, add_salary, remove_salary,
-    reset_salary, get_settings, all_users,
+    reset_salary, get_settings, all_users, log_salary, salary_entries,
 )
 from config import PERMS_CURATOR
 from helpers import is_curator, send_log
@@ -13,7 +15,6 @@ GREEN = 0x2ECC71
 
 CURRENCY = {"points": "баллов", "salary": "ЗП"}
 
-# Все четыре операции описаны данными
 ACTIONS = {
     "add_points":    {"icon": "➕", "title": "Выдать баллы",  "field": "points", "give": True,  "color": GREEN},
     "remove_points": {"icon": "➖", "title": "Забрать баллы", "field": "points", "give": False, "color": RED},
@@ -26,7 +27,6 @@ def num(v: int) -> str:
     return f"{v:,}".replace(",", " ")
 
 
-# ═══════════════ ПЛАШКА ═══════════════
 def build_panel(user) -> discord.Embed:
     users = all_users()
     total_points = sum(u.get("points", 0) for u in users.values())
@@ -55,7 +55,6 @@ def build_panel(user) -> discord.Embed:
     return e
 
 
-# ═══════════════ ЛОГ ═══════════════
 async def log_op(client, action_key, curator, target, amount, reason, balance_after, note=None):
     cfg = ACTIONS[action_key]
     e = discord.Embed(title=f"{cfg['icon']} {cfg['title']}", color=cfg["color"], timestamp=discord.utils.utcnow())
@@ -69,7 +68,6 @@ async def log_op(client, action_key, curator, target, amount, reason, balance_af
     await send_log(client, "pay_log", e)
 
 
-# ═══════════════ БАЗА: только кураторы ═══════════════
 class CuratorView(discord.ui.View):
     async def interaction_check(self, i: discord.Interaction) -> bool:
         if not is_curator(i.user):
@@ -78,7 +76,6 @@ class CuratorView(discord.ui.View):
         return True
 
 
-# ═══════════════ ВЫБОР УЧАСТНИКА → СУММА ═══════════════
 class AmountModal(discord.ui.Modal):
     def __init__(self, action_key, target, panel):
         cfg = ACTIONS[action_key]
@@ -112,8 +109,10 @@ class AmountModal(discord.ui.Modal):
             text = f"✅ +{num(amt)} баллов → {t.mention}"
         elif key == "add_salary":
             pen = min(get_user(t.id)["warnings"] * 10, 50)
+            gross = amt
             amt = int(amt * (100 - pen) / 100)
             add_salary(t.id, amt)
+            log_salary(t.id, gross, amt, i.user.id, "pay")
             note = f"Штраф за выговоры: −{pen}%" if pen else None
             text = f"✅ +{num(amt)} ЗП → {t.mention}" + (f" (штраф −{pen}%)" if pen else "")
         elif key == "remove_points":
@@ -122,11 +121,12 @@ class AmountModal(discord.ui.Modal):
                 return await i.response.send_message(
                     f"❌ У {t.mention} только **{num(have)}** баллов.", ephemeral=True)
             text = f"✅ −{num(amt)} баллов у {t.mention}"
-        else:  # remove_salary
+        else:
             if remove_salary(t.id, amt) is None:
                 have = get_user(t.id)["salary"]
                 return await i.response.send_message(
                     f"❌ У {t.mention} только **{num(have)}** ЗП.", ephemeral=True)
+            log_salary(t.id, amt, amt, i.user.id, "take")
             text = f"✅ −{num(amt)} ЗП у {t.mention}"
 
         after = get_user(t.id)[cfg["field"]]
@@ -148,7 +148,6 @@ class TargetPick(CuratorView):
         await i.response.send_modal(AmountModal(self.action_key, target, self.panel))
 
 
-# ═══════════════ ОБНУЛЕНИЕ ЗП ═══════════════
 class ResetBranchView(CuratorView):
     def __init__(self, panel):
         super().__init__(timeout=60)
@@ -198,7 +197,110 @@ class ConfirmResetView(CuratorView):
         self.stop()
 
 
-# ═══════════════ ГЛАВНОЕ МЕНЮ ═══════════════
+PERIODS = {"week": ("Неделя", 7), "month": ("Месяц", 30), "all": ("Всё время", None)}
+BRANCHES = {"all": "Все", "builder": "Строители", "tester": "Тестеры"}
+
+
+def build_payroll(guild: discord.Guild, period: str, branch: str) -> discord.Embed:
+    label, days = PERIODS[period]
+    since = time.time() - days * 86400 if days else 0
+    entries = salary_entries(since)
+
+    note = None
+    if branch != "all":
+        role_id = get_settings().get(f"{branch}_role")
+        role = guild.get_role(role_id) if role_id else None
+        if role is None:
+            note = "Роль этой ветки не настроена (её задаёт владелец в `/admin`)."
+            entries = []
+        else:
+            ids = {m.id for m in role.members}
+            entries = [e for e in entries if e["uid"] in ids]
+
+    agg = {}
+    for en in entries:
+        a = agg.setdefault(en["uid"], {"gross": 0, "net": 0, "taken": 0})
+        if en["kind"] == "pay":
+            a["gross"] += en["gross"]
+            a["net"] += en["net"]
+        else:
+            a["taken"] += en["net"]
+    rows = sorted(agg.items(), key=lambda kv: kv[1]["net"] - kv[1]["taken"], reverse=True)
+
+    e = discord.Embed(title=f"📋 Ведомость ЗП — {label}", color=RED, timestamp=discord.utils.utcnow())
+    head = f"Ветка: **{BRANCHES[branch]}**"
+    if days:
+        head += f" · с {discord.utils.format_dt(discord.utils.utcnow() - datetime.timedelta(days=days), 'd')}"
+    if note:
+        e.description = head + "\n" + note
+        return e
+
+    if not rows:
+        e.description = head + "\n\nНачислений за этот период нет."
+    else:
+        lines = []
+        for n, (uid, a) in enumerate(rows[:20], start=1):
+            total = a["net"] - a["taken"]
+            line = f"`{n}.` <@{uid}> — **{num(total)}**"
+            pen = a["gross"] - a["net"]
+            extra = []
+            if pen:
+                extra.append(f"штраф −{num(pen)}")
+            if a["taken"]:
+                extra.append(f"изъято {num(a['taken'])}")
+            if extra:
+                line += " (" + ", ".join(extra) + ")"
+            lines.append(line)
+        if len(rows) > 20:
+            lines.append(f"… и ещё {len(rows) - 20}")
+        e.description = head + "\n\n" + "\n".join(lines)
+
+        tot_net = sum(a["net"] for a in agg.values())
+        tot_pen = sum(a["gross"] - a["net"] for a in agg.values())
+        tot_take = sum(a["taken"] for a in agg.values())
+        e.add_field(name="Начислено", value=f"`{num(tot_net)}`", inline=True)
+        e.add_field(name="Удержано штрафов", value=f"`{num(tot_pen)}`", inline=True)
+        e.add_field(name="Изъято", value=f"`{num(tot_take)}`", inline=True)
+    e.set_footer(text="Учёт ведётся с момента добавления ведомости")
+    return e
+
+
+class PeriodSelect(discord.ui.Select):
+    def __init__(self, current):
+        super().__init__(placeholder="Период", row=0, options=[
+            discord.SelectOption(label=lbl, value=k, default=(k == current)) for k, (lbl, _) in PERIODS.items()])
+
+    async def callback(self, i: discord.Interaction):
+        v: PayrollView = self.view
+        v.period = self.values[0]
+        v.rebuild()
+        await i.response.edit_message(embed=build_payroll(i.guild, v.period, v.branch), view=v)
+
+
+class BranchSelect(discord.ui.Select):
+    def __init__(self, current):
+        super().__init__(placeholder="Ветка", row=1, options=[
+            discord.SelectOption(label=lbl, value=k, default=(k == current)) for k, lbl in BRANCHES.items()])
+
+    async def callback(self, i: discord.Interaction):
+        v: PayrollView = self.view
+        v.branch = self.values[0]
+        v.rebuild()
+        await i.response.edit_message(embed=build_payroll(i.guild, v.period, v.branch), view=v)
+
+
+class PayrollView(CuratorView):
+    def __init__(self):
+        super().__init__(timeout=180)
+        self.period, self.branch = "week", "all"
+        self.rebuild()
+
+    def rebuild(self):
+        self.clear_items()
+        self.add_item(PeriodSelect(self.period))
+        self.add_item(BranchSelect(self.branch))
+
+
 class ActionButton(discord.ui.Button):
     def __init__(self, action_key, row):
         cfg = ACTIONS[action_key]
@@ -244,6 +346,11 @@ class EconomyView(CuratorView):
     @discord.ui.button(label="Обнулить ЗП ветки", emoji="🧹", style=discord.ButtonStyle.secondary, row=2)
     async def reset_btn(self, i, b):
         await i.response.send_message("Выберите ветку:", view=ResetBranchView(self), ephemeral=True)
+
+    @discord.ui.button(label="Ведомость ЗП", emoji="📋", style=discord.ButtonStyle.primary, row=2)
+    async def payroll_btn(self, i: discord.Interaction, b):
+        view = PayrollView()
+        await i.response.send_message(embed=build_payroll(i.guild, view.period, view.branch), view=view, ephemeral=True)
 
     @discord.ui.button(label="Обновить", emoji="🔄", style=discord.ButtonStyle.secondary, row=2)
     async def reload(self, i: discord.Interaction, b):

@@ -8,9 +8,9 @@ from storage import get_user, add_stats, all_users
 from helpers import is_responsible
 from image_gen import generate_profile_card, warm_up, OUT_EXT
 
-XP_COOLDOWN = 30        # сек: не чаще, чем раз в 30 сек даём XP и счётчик на баллы
+XP_COOLDOWN = 30
 XP_PER_MESSAGE = 15
-VOICE_TICK = 300        # сек
+VOICE_TICK = 300
 
 
 class EconomyCog(commands.Cog):
@@ -21,7 +21,6 @@ class EconomyCog(commands.Cog):
         self.voice_loop.start()
 
     async def cog_load(self):
-        # Прогреваем фон и шрифты при старте, чтобы первый /profile не тормозил
         await asyncio.to_thread(warm_up, BG_PATH)
 
     def cog_unload(self):
@@ -33,13 +32,10 @@ class EconomyCog(commands.Cog):
         uid = message.author.id
         now = time.monotonic()
 
-        # Персонал (владелец, кураторы, ответственные) получает статистику и XP,
-        # но не получает баллы: им платят ЗП
         staff = is_responsible(message.author)
 
-        # Сообщение считаем всегда, а XP и баллы только с кулдауном (защита от спама)
         if now - self._last_xp.get(uid, 0) < XP_COOLDOWN:
-            add_stats(uid, messages=1)
+            add_stats(uid, messages=1, last_msg=time.time())
             return
         self._last_xp[uid] = now
 
@@ -49,7 +45,7 @@ class EconomyCog(commands.Cog):
             if self._msg_count[uid] >= 5:
                 self._msg_count[uid] = 0
                 pts = 1
-        add_stats(uid, messages=1, xp=XP_PER_MESSAGE, points=pts)
+        add_stats(uid, messages=1, xp=XP_PER_MESSAGE, points=pts, last_msg=time.time())
 
     @tasks.loop(minutes=5)
     async def voice_loop(self):
@@ -57,12 +53,12 @@ class EconomyCog(commands.Cog):
             afk = guild.afk_channel
             for vc in guild.voice_channels:
                 if afk and vc.id == afk.id:
-                    continue  # AFK-канал не считаем
+                    continue
                 for m in vc.members:
                     v = m.voice
                     if m.bot or not v or v.self_deaf or v.deaf:
                         continue
-                    add_stats(m.id, voice_time=VOICE_TICK, xp=30, points=2)
+                    add_stats(m.id, voice_time=VOICE_TICK, xp=30, points=2, last_voice=time.time())
 
     @voice_loop.before_loop
     async def _bv(self): await self.bot.wait_until_ready()
@@ -72,7 +68,6 @@ class EconomyCog(commands.Cog):
         await inter.response.defer()
         m = member or inter.user
         u = get_user(m.id)
-        # Полный рейтинг по времени в войсе (без обрезки), чтобы место считалось для всех
         top_users = sorted(all_users().items(), key=lambda x: x[1].get("voice_time", 0), reverse=True)
 
         try:
@@ -100,7 +95,6 @@ async def setup(bot):
     await bot.add_cog(EconomyCog(bot))
 
 
-# ═══════════════ КАРТОЧКА БАЛАНСА ═══════════════
 class BalanceView(discord.ui.LayoutView):
     def __init__(self, member: discord.Member, points: int, salary: int):
         super().__init__(timeout=None)
