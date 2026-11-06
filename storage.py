@@ -1,10 +1,14 @@
 import json
 import os
 import time
-from config import USERS_F, SHOP_F, STAFF_F, SETTINGS_F, ORDERS_F, SALARY_LOG_F, WARNS_F
+from datetime import datetime, timedelta, timezone
+from config import (
+    USERS_F, SHOP_F, STAFF_F, SETTINGS_F, ORDERS_F, SALARY_LOG_F, WARNS_F, DAY_UTC_OFFSET_HOURS,
+)
 
 DEFAULT_USER = {"points": 0, "salary": 0, "warnings": 0, "messages": 0, "voice_time": 0, "xp": 0,
-                "last_msg": 0, "last_voice": 0}
+                "last_msg": 0, "last_voice": 0,
+                "day": "", "day_voice": 0, "day_text": 0}
 DEFAULT_SETTINGS = {
     "purchase_log": None, "mod_log": None, "pay_log": None,
     "message_log": None, "voice_log": None,
@@ -88,6 +92,24 @@ def add_stats(uid, *, points=0, salary=0, messages=0, voice_time=0, xp=0, last_m
     if last_voice is not None:
         kw["last_voice"] = last_voice
     set_user(uid, **kw)
+
+
+def _today():
+    tz = timezone(timedelta(hours=DAY_UTC_OFFSET_HOURS))
+    return datetime.now(tz).strftime("%Y-%m-%d")
+
+
+def reserve_daily(uid, kind, amount, limit):
+    u = get_user(uid)
+    today = _today()
+    if u["day"] == today:
+        counters = {"voice": u["day_voice"], "text": u["day_text"]}
+    else:
+        counters = {"voice": 0, "text": 0}
+    give = max(0, min(amount, limit - counters[kind]))
+    counters[kind] += give
+    set_user(uid, day=today, day_voice=counters["voice"], day_text=counters["text"])
+    return give
 
 
 def add_points(uid, n): add_stats(uid, points=n)

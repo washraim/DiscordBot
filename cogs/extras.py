@@ -5,6 +5,7 @@ from storage import all_users, get_user, transfer
 from helpers import is_curator, is_responsible, is_owner, send_log
 from storage import get_settings
 from image_gen import XP_PER_LEVEL
+from config import DAILY_VOICE_POINTS_LIMIT, DAILY_TEXT_POINTS_LIMIT
 
 RED = 0x9B111E
 MEDALS = {1: "🥇", 2: "🥈", 3: "🥉"}
@@ -126,8 +127,8 @@ def build_help_embed(user) -> discord.Embed:
     e.add_field(
         name="💰 Как заработать",
         value=(
-            "• **Сообщения:** 1 балл за каждые 5 сообщений, XP не чаще раза в 30 сек\n"
-            "• **Войс:** 2 балла и XP за каждые 5 минут в голосовом канале\n"
+            f"• **Сообщения:** 1 балл за каждые 5 сообщений, не больше {DAILY_TEXT_POINTS_LIMIT} баллов в сутки\n"
+            f"• **Войс:** 2 балла и XP за каждые 5 минут с включённым микрофоном, не больше {DAILY_VOICE_POINTS_LIMIT} баллов в сутки\n"
             f"• **Уровень:** новый уровень каждые {num(XP_PER_LEVEL)} XP\n"
             "• **ЗП:** выдаёт куратор за работу, штраф за выговоры до −50%"
         ),

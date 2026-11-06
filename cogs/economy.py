@@ -3,8 +3,8 @@ import time
 import discord
 from discord.ext import commands, tasks
 from discord import app_commands
-from config import BG_PATH
-from storage import get_user, add_stats, all_users
+from config import BG_PATH, DAILY_VOICE_POINTS_LIMIT, DAILY_TEXT_POINTS_LIMIT
+from storage import get_user, add_stats, all_users, reserve_daily
 from helpers import is_responsible
 from image_gen import generate_profile_card, warm_up, OUT_EXT
 
@@ -44,7 +44,7 @@ class EconomyCog(commands.Cog):
             self._msg_count[uid] = self._msg_count.get(uid, 0) + 1
             if self._msg_count[uid] >= 5:
                 self._msg_count[uid] = 0
-                pts = 1
+                pts = reserve_daily(uid, "text", 1, DAILY_TEXT_POINTS_LIMIT)
         add_stats(uid, messages=1, xp=XP_PER_MESSAGE, points=pts, last_msg=time.time())
 
     @tasks.loop(minutes=5)
@@ -56,9 +56,10 @@ class EconomyCog(commands.Cog):
                     continue
                 for m in vc.members:
                     v = m.voice
-                    if m.bot or not v or v.self_deaf or v.deaf:
+                    if m.bot or not v or v.self_deaf or v.deaf or v.self_mute or v.mute:
                         continue
-                    add_stats(m.id, voice_time=VOICE_TICK, xp=30, points=2, last_voice=time.time())
+                    pts = reserve_daily(m.id, "voice", 2, DAILY_VOICE_POINTS_LIMIT)
+                    add_stats(m.id, voice_time=VOICE_TICK, xp=30, points=pts, last_voice=time.time())
 
     @voice_loop.before_loop
     async def _bv(self): await self.bot.wait_until_ready()
