@@ -8,7 +8,7 @@ from storage import (
     reset_salary, get_settings, all_users, log_salary, salary_entries,
 )
 from config import PERMS_CURATOR
-from helpers import is_curator, send_log
+from helpers import is_curator, is_owner, send_log
 
 RED = 0x9B111E
 GREEN = 0x2ECC71
@@ -93,6 +93,8 @@ class AmountModal(discord.ui.Modal):
     async def on_submit(self, i: discord.Interaction):
         if not is_curator(i.user):
             return await i.response.send_message("❌ Нет прав.", ephemeral=True)
+        if ACTIONS[self.action_key]["give"] and self.target.id == i.user.id and not is_owner(i.user):
+            return await i.response.send_message("❌ Нельзя выдавать самому себе.", ephemeral=True)
         try:
             amt = int(self.amount.value.replace(" ", ""))
         except ValueError:
@@ -145,6 +147,8 @@ class TargetPick(CuratorView):
         target = sel.values[0]
         if target.bot:
             return await i.response.edit_message(content="❌ У ботов нет баланса.", view=None)
+        if ACTIONS[self.action_key]["give"] and target.id == i.user.id and not is_owner(i.user):
+            return await i.response.edit_message(content="❌ Нельзя выдавать самому себе.", view=None)
         await i.response.send_modal(AmountModal(self.action_key, target, self.panel))
 
 

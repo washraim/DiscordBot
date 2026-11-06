@@ -2,10 +2,10 @@ import discord
 from discord.ext import commands
 from discord import app_commands
 from storage import (
-    get_settings, set_setting, get_staff, set_staff, del_staff, all_users, get_shop
+    get_settings, set_setting, get_staff, staff_levels, add_staff_level, remove_staff_level, all_users, get_shop
 )
-from helpers import is_owner
-from config import OWNER_ID, PERMS_OWNER
+from helpers import is_owner, member_levels
+from config import OWNER_ID, PERMS_OWNER, PERMS_CURATOR, PERMS_RESPONSIBLE
 
 RED = 0x9B111E
 LEVELS = {
@@ -40,8 +40,13 @@ def _role(guild, rid):
     return f"<@&{rid}>" if guild.get_role(rid) else "⚠️ `удалена`"
 
 
-def _staff_list(level):
-    ids = [int(uid) for uid, lvl in get_staff().items() if lvl == level]
+def _staff_list(guild, level):
+    ids = {int(uid) for uid in get_staff() if level in staff_levels(uid)}
+    rid = get_settings().get(f"{level}_role")
+    role = guild.get_role(rid) if rid else None
+    if role:
+        ids.update(m.id for m in role.members)
+    ids = sorted(ids)
     if not ids:
         return "`никого`"
     shown = "\n".join(f"• <@{u}>" for u in ids[:10])
@@ -86,8 +91,8 @@ def build_embed(guild: discord.Guild, user: discord.abc.User) -> discord.Embed:
               f"**Товаров:** `{len(get_shop())}`\n"
               f"**ЗП на руках:** `{total_salary:,}`".replace(",", " "),
         inline=True)
-    e.add_field(name="👑 Кураторы", value=_staff_list("curator"), inline=True)
-    e.add_field(name="🛡️ Ответственные", value=_staff_list("responsible"), inline=True)
+    e.add_field(name="👑 Кураторы", value=_staff_list(guild, "curator"), inline=True)
+    e.add_field(name="🛡️ Ответственные", value=_staff_list(guild, "responsible"), inline=True)
     e.add_field(name="🔑 Владелец", value=f"<@{OWNER_ID}>", inline=True)
 
     e.set_footer(text=f"Открыл: {user.display_name}", icon_url=user.display_avatar.url)
@@ -150,6 +155,27 @@ class ChannelPick(OwnerView):
         await self.panel.refresh()
 
 
+ROLE_RIGHTS = {
+    "curator_role": {**PERMS_CURATOR, **PERMS_RESPONSIBLE},
+    "responsible_role": dict(PERMS_RESPONSIBLE),
+}
+RIGHT_NAMES = {"manage_messages": "Управление сообщениями", "moderate_members": "Модерация участников"}
+
+
+async def ensure_role_rights(role, key):
+    need = [n for n, v in ROLE_RIGHTS.get(key, {}).items() if v and not getattr(role.permissions, n)]
+    if not need:
+        return ""
+    names = ", ".join(RIGHT_NAMES.get(n, n) for n in need)
+    perms = discord.Permissions(role.permissions.value)
+    perms.update(**{n: True for n in need})
+    try:
+        await role.edit(permissions=perms, reason="Права для отображения команд бота")
+    except discord.HTTPException:
+        return f"\n⚠️ Не удалось добавить роли права ({names}): включите их вручную, иначе команды не появятся."
+    return f"\n🔧 Роли добавлены права: {names}."
+
+
 class RolePick(OwnerView):
     def __init__(self, key, title, panel):
         super().__init__(timeout=60)
@@ -161,7 +187,9 @@ class RolePick(OwnerView):
         if role.is_default():
             return await i.response.edit_message(content="❌ Нельзя выбрать @everyone.", view=None)
         set_setting(self.key, role.id)
-        await i.response.edit_message(content=f"✅ **{self.title}:** {role.mention}", view=None)
+        await i.response.defer()
+        note = await ensure_role_rights(role, self.key)
+        await i.edit_original_response(content=f"✅ **{self.title}:** {role.mention}{note}", view=None)
         self.stop()
         await self.panel.refresh()
 
@@ -173,32 +201,36 @@ class RolePick(OwnerView):
         await self.panel.refresh()
 
 
-async def sync_staff_role(guild: discord.Guild, user, new_level):
-    s = get_settings()
-    mapping = {"curator": s.get("curator_role"), "responsible": s.get("responsible_role")}
+async def sync_staff_role(guild, user, add=(), remove=()):
     member = guild.get_member(user.id)
     if member is None:
-        return "\n⚠️ Участник не найден на сервере, Discord-роль не выдана."
-
-    notes, problem, configured = [], False, False
-    for level, rid in mapping.items():
-        role = guild.get_role(rid) if rid else None
+        return "\n⚠️ Участник не найден на сервере, Discord-роли не изменены."
+    s = get_settings()
+    problem, unbound = False, []
+    for level in add:
+        role = guild.get_role(s.get(f"{level}_role") or 0)
         if role is None:
+            unbound.append(LEVELS[level][1])
             continue
-        configured = True
-        try:
-            if level == new_level and role not in member.roles:
+        if role not in member.roles:
+            try:
                 await member.add_roles(role, reason="Должность из /admin")
-            elif level != new_level and role in member.roles:
+            except discord.HTTPException:
+                problem = True
+    for level in remove:
+        role = guild.get_role(s.get(f"{level}_role") or 0)
+        if role is not None and role in member.roles:
+            try:
                 await member.remove_roles(role, reason="Должность из /admin")
-        except discord.HTTPException:
-            problem = True
+            except discord.HTTPException:
+                problem = True
+    notes = []
     if problem:
-        notes.append("⚠️ Discord-роль выдать не удалось: проверьте право «Управление ролями» "
+        notes.append("⚠️ Discord-роль изменить не удалось: проверьте право «Управление ролями» "
                      "и что роль бота выше ролей должностей.")
-    if new_level and not configured:
-        notes.append("ℹ️ Discord-роли должностей не привязаны в панели: команды в списке "
-                     "у участника не появятся.")
+    if unbound:
+        notes.append("ℹ️ Не привязана Discord-роль: " + ", ".join(unbound) +
+                     ". Без неё команды в списке не появятся.")
     return ("\n" + "\n".join(notes)) if notes else ""
 
 
@@ -215,26 +247,60 @@ class GrantView(OwnerView):
         if is_owner(target):
             return await i.response.edit_message(content="❌ У владельца и так полный доступ.", view=None)
 
-        current = get_staff().get(str(target.id))
-        if self.level is None:
-            if not current:
-                return await i.response.edit_message(
-                    content=f"ℹ️ У {target.mention} нет должности.", view=None)
-            del_staff(target.id)
-            msg = f"✅ С {target.mention} снята должность: **{LEVELS[current][1]}**"
-        else:
-            emoji, name = LEVELS[self.level]
-            if current == self.level:
-                return await i.response.edit_message(
-                    content=f"ℹ️ {target.mention} уже **{name}**.", view=None)
-            set_staff(target.id, self.level)
-            was = f" (было: {LEVELS[current][1]})" if current in LEVELS else ""
-            msg = f"✅ {target.mention} → {emoji} **{name}**{was}"
+        member = i.guild.get_member(target.id)
+        levels = member_levels(member) if member else set(staff_levels(target.id))
+        emoji, name = LEVELS[self.level]
+        if self.level in levels:
+            return await i.response.edit_message(content=f"ℹ️ {target.mention} уже **{name}**.", view=None)
+
+        add_staff_level(target.id, self.level)
         await i.response.defer()
-        note = await sync_staff_role(i.guild, target, self.level)
-        await i.edit_original_response(content=msg + note, view=None)
+        note = await sync_staff_role(i.guild, target, add=[self.level])
+        now = ", ".join(LEVELS[lv][1] for lv in LEVELS if lv in levels | {self.level})
+        await i.edit_original_response(
+            content=f"✅ {target.mention} → {emoji} **{name}** (сейчас: {now}){note}", view=None)
         self.stop()
         await self.panel.refresh()
+
+
+class RevokePick(OwnerView):
+    def __init__(self, target, levels, panel):
+        super().__init__(timeout=60)
+        self.target, self.levels, self.panel = target, levels, panel
+        opts = [discord.SelectOption(label=LEVELS[lv][1], value=lv, emoji=LEVELS[lv][0]) for lv in levels]
+        if len(levels) > 1:
+            opts.append(discord.SelectOption(label="Все должности", value="all", emoji="🧹"))
+        self.sel = discord.ui.Select(placeholder="Какую должность снять?", options=opts)
+        self.sel.callback = self.picked
+        self.add_item(self.sel)
+
+    async def picked(self, i: discord.Interaction):
+        choice = self.sel.values[0]
+        todo = list(self.levels) if choice == "all" else [choice]
+        for lv in todo:
+            remove_staff_level(self.target.id, lv)
+        await i.response.defer()
+        note = await sync_staff_role(i.guild, self.target, remove=todo)
+        names = ", ".join(LEVELS[lv][1] for lv in todo)
+        await i.edit_original_response(content=f"✅ С {self.target.mention} снято: **{names}**{note}", view=None)
+        self.stop()
+        await self.panel.refresh()
+
+
+class RevokeView(OwnerView):
+    def __init__(self, panel):
+        super().__init__(timeout=60)
+        self.panel = panel
+
+    @discord.ui.select(cls=discord.ui.UserSelect, placeholder="Выберите участника")
+    async def pick(self, i: discord.Interaction, sel):
+        target = sel.values[0]
+        member = i.guild.get_member(target.id)
+        levels = sorted(member_levels(member) if member else set(staff_levels(target.id)))
+        if not levels:
+            return await i.response.edit_message(content=f"ℹ️ У {target.mention} нет должности.", view=None)
+        await i.response.edit_message(content=f"Какую должность снять у {target.mention}?",
+                                      view=RevokePick(target, levels, self.panel))
 
 
 class SettingButton(discord.ui.Button):
@@ -284,7 +350,7 @@ class AdminView(OwnerView):
 
     @discord.ui.button(label="Снять должность", emoji="❌", style=discord.ButtonStyle.danger, row=3)
     async def g3(self, i, b):
-        await i.response.send_message("С кого снять должность?", view=GrantView(None, self), ephemeral=True)
+        await i.response.send_message("С кого снять должность?", view=RevokeView(self), ephemeral=True)
 
     @discord.ui.button(label="Обновить", emoji="🔄", style=discord.ButtonStyle.secondary, row=4)
     async def reload(self, i: discord.Interaction, b):

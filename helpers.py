@@ -1,12 +1,27 @@
 import discord
 from config import OWNER_ID
-from storage import get_staff, get_settings
+from storage import staff_levels, get_settings
 
 def is_owner(m): return m.id == OWNER_ID
-def is_curator(m): return is_owner(m) or get_staff().get(str(m.id)) == "curator"
+
+
+def member_levels(m):
+    levels = set(staff_levels(m.id))
+    s = get_settings()
+    role_ids = {r.id for r in getattr(m, "roles", [])}
+    if s.get("curator_role") in role_ids:
+        levels.add("curator")
+    if s.get("responsible_role") in role_ids:
+        levels.add("responsible")
+    return levels
+
+
+def is_curator(m):
+    return is_owner(m) or "curator" in member_levels(m)
+
+
 def is_responsible(m):
-    if is_owner(m): return True
-    return get_staff().get(str(m.id)) in ("curator", "responsible")
+    return is_owner(m) or bool(member_levels(m) & {"curator", "responsible"})
 
 
 def is_staff(m):

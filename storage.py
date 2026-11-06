@@ -178,13 +178,30 @@ def get_staff():
     return _data(STAFF_F)
 
 
-def set_staff(uid, lvl):
-    _data(STAFF_F)[str(uid)] = lvl
+def staff_levels(uid):
+    raw = _data(STAFF_F).get(str(uid))
+    if isinstance(raw, list):
+        return list(raw)
+    return [raw] if raw else []
+
+
+def add_staff_level(uid, level):
+    levels = staff_levels(uid)
+    if level not in levels:
+        levels.append(level)
+    _data(STAFF_F)[str(uid)] = levels
     _commit(STAFF_F)
 
 
-def del_staff(uid):
-    _data(STAFF_F).pop(str(uid), None)
+def remove_staff_level(uid, level=None):
+    if level is None:
+        _data(STAFF_F).pop(str(uid), None)
+    else:
+        levels = [lv for lv in staff_levels(uid) if lv != level]
+        if levels:
+            _data(STAFF_F)[str(uid)] = levels
+        else:
+            _data(STAFF_F).pop(str(uid), None)
     _commit(STAFF_F)
 
 
