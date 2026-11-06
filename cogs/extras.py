@@ -2,7 +2,7 @@ import discord
 from discord.ext import commands
 from discord import app_commands
 from storage import all_users, get_user, transfer
-from helpers import is_curator, is_responsible, is_owner, send_log
+from helpers import is_curator, is_responsible, is_owner, is_staff, send_log
 from storage import get_settings
 from image_gen import XP_PER_LEVEL
 from config import DAILY_VOICE_POINTS_LIMIT, DAILY_TEXT_POINTS_LIMIT
@@ -118,7 +118,6 @@ def build_help_embed(user) -> discord.Embed:
             "`/top` — рейтинги сервера\n"
             "`/pay` — перевести баллы или ЗП\n"
             "`/shop` — магазин (игроков или персонала, в зависимости от роли)\n"
-            "`/warnings` — история выговоров участника\n"
             "`/orders` — ваши заказы и их статусы\n"
             "`/help` — эта справка"
         ),
@@ -134,6 +133,8 @@ def build_help_embed(user) -> discord.Embed:
         ),
         inline=False,
     )
+    if is_staff(user):
+        e.add_field(name="🛠️ Для персонала", value="`/warnings` — история выговоров участника", inline=False)
     if is_responsible(user):
         e.add_field(name="🛡️ Для ответственных", value="`/warn` — выдать выговор", inline=False)
     if is_curator(user):

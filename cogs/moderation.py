@@ -4,9 +4,9 @@ from discord.ext import commands, tasks
 from discord import app_commands
 from config import PERMS_CURATOR, PERMS_RESPONSIBLE, WARN_EXPIRE_DAYS
 from storage import (
-    get_user, set_user, add_warn_record, warn_records, clear_warn_record, decay_warns, get_settings,
+    get_user, set_user, add_warn_record, warn_records, clear_warn_record, decay_warns,
 )
-from helpers import is_curator, is_responsible, is_owner, send_log
+from helpers import is_curator, is_responsible, is_owner, is_staff, send_log
 
 RED = 0x9B111E
 GREEN = 0x2ECC71
@@ -91,6 +91,8 @@ class ModerationCog(commands.Cog):
 
     @app_commands.command(name="warnings", description="История выговоров участника")
     async def warnings_cmd(self, inter: discord.Interaction, member: discord.Member):
+        if not is_staff(inter.user):
+            return await inter.response.send_message("❌ Выговоры доступны только персоналу.", ephemeral=True)
         await inter.response.send_message(embed=build_warnings_embed(member), ephemeral=True)
 
     @app_commands.command(name="warn_clear", description="Снять выговор (куратор)")
@@ -174,6 +176,5 @@ class WarnModal(discord.ui.Modal, title="Выдать выговор"):
         e.add_field(name="Всего", value=str(u["warnings"]), inline=True)
         e.add_field(name="Причина", value=self.w_reason.value, inline=False)
         e.set_footer(text=f"Выговор #{wid} · автоснятие через {WARN_EXPIRE_DAYS} дн. без нарушений")
-        await inter.response.send_message(embed=e)
-        if get_settings().get("mod_log") != inter.channel_id:
-            await send_log(inter.client, "mod_log", e)
+        await inter.response.send_message(embed=e, ephemeral=True)
+        await send_log(inter.client, "mod_log", e)
