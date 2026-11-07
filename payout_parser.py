@@ -9,6 +9,10 @@ NICK_LABEL = re.compile(
     r"[^\w\n]*[:=\-–—]\s*(.+?)\s*$",
     re.I | re.M,
 )
+NICK_INLINE = re.compile(
+    r"^[^\w@<]*(?:ник(?:нейм)?|nick(?:name)?)[*_~]*[ \t]+(?![:=\-–—])(.+?)[ \t]*[:=]?[ \t]*$",
+    re.I | re.M,
+)
 MENTION = re.compile(r"<@!?(\d+)>")
 THOUSANDS = re.compile(r"^\d{1,3}(?:[ .,]\d{3})+$")
 KEYWORD_WORD = re.compile(r"выплат\w*", re.I)
@@ -40,11 +44,11 @@ def leftover_nick(line):
     s = KEYWORD_WORD.sub(" ", line)
     s = STANDALONE.sub(" ", s, count=1)
     s = CURRENCY_WORD.sub(" ", s)
-    s = re.sub(r"\s+", " ", s).strip(" \t*_~`:=-–—→>,;.|")
+    s = re.sub(r"\s+", " ", s).strip(" \t*_~`:=-–—→>,;.|#")
     words = s.split(" ") if s else []
     while words and words[0].casefold() in STOP_WORDS:
         words.pop(0)
-    s = " ".join(words).strip(" \t*_~`:=-–—→>,;.|")
+    s = " ".join(words).strip(" \t*_~`:=-–—→>,;.|#")
     if s.startswith("@"):
         s = s[1:].strip()
     if not s or len(s) > 40 or len(s.split(" ")) > 5:
@@ -88,7 +92,7 @@ def parse_payout(text):
         if amount is None:
             return {"error": "Сумма записана неоднозначно. Укажите целое число, например `Выплата: 5000`."}
 
-    m = NICK_LABEL.search(text)
+    m = NICK_LABEL.search(text) or NICK_INLINE.search(text)
     if m:
         raw = clean_nick(m.group(1))
         mention = MENTION.search(raw)

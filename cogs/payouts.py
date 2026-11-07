@@ -22,8 +22,25 @@ def num(v):
     return f"{v:,}".replace(",", " ")
 
 
+def walk_components(components):
+    texts = []
+    for c in components or []:
+        content = getattr(c, "content", None)
+        if isinstance(content, str):
+            texts.append(content)
+        for attr in ("children", "components"):
+            sub = getattr(c, attr, None)
+            if sub:
+                texts.extend(walk_components(sub))
+        accessory = getattr(c, "accessory", None)
+        if accessory is not None:
+            texts.extend(walk_components([accessory]))
+    return texts
+
+
 def collect_text(message):
     parts = [message.content or ""]
+    parts.extend(walk_components(getattr(message, "components", None)))
     for e in message.embeds:
         if e.author and e.author.name:
             parts.append(e.author.name)
@@ -55,9 +72,7 @@ class PayoutsCog(commands.Cog):
 
     @commands.Cog.listener()
     async def on_message_edit(self, before: discord.Message, after: discord.Message):
-        same = (before.content == after.content
-                and [e.to_dict() for e in before.embeds] == [e.to_dict() for e in after.embeds])
-        if not same:
+        if collect_text(before) != collect_text(after):
             await self.handle(after)
 
     def resolve(self, guild, parsed, branch):
@@ -96,8 +111,17 @@ class PayoutsCog(commands.Cog):
         automated = message.author.bot or message.webhook_id is not None
         if not automated and not is_curator(message.author):
             return
-        parsed = parse_payout(collect_text(message))
-        if parsed is None or payout_done(message.id):
+        text = collect_text(message)
+        parsed = parse_payout(text)
+        if parsed is None:
+            if not text.strip() and (message.embeds or getattr(message, "components", None)):
+                await self.respond(message, "⚠️", discord.Embed(
+                    title="⚠️ Не вижу текста в сообщении",
+                    description="Бот не смог прочитать содержимое. Проверьте, что в настройках бота включён "
+                                "Message Content Intent и что у бота есть право читать этот канал.",
+                    color=RED))
+            return
+        if payout_done(message.id):
             return
 
         error, member = parsed.get("error"), None
@@ -108,8 +132,10 @@ class PayoutsCog(commands.Cog):
         if not error and parsed["amount"] > PAYOUT_MAX_AMOUNT:
             error = f"Сумма больше допустимого лимита ({num(PAYOUT_MAX_AMOUNT)}). Начислите вручную через `/economy`."
         if error:
-            return await self.respond(message, "⚠️", discord.Embed(
-                title="⚠️ Выплата не начислена", description=f"{error}\n\n{FORMAT_HINT}", color=RED))
+            e = discord.Embed(title="⚠️ Выплата не начислена", description=f"{error}\n\n{FORMAT_HINT}", color=RED)
+            snippet = text.replace("```", "'" * 3)[:500]
+            e.add_field(name="Что прочитал бот", value=f"```{snippet}```", inline=False)
+            return await self.respond(message, "⚠️", e)
 
         amount = parsed["amount"]
         pen = min(get_user(member.id)["warnings"] * 10, 50)
