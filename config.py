@@ -30,9 +30,11 @@ PERMS_RESPONSIBLE = {"moderate_members": True}
 ORDERS_F     = DATA / "orders.json"
 SALARY_LOG_F = DATA / "salary_log.json"
 WARNS_F      = DATA / "warns.json"
+PAYOUTS_F    = DATA / "payouts.json"
 
 WARN_EXPIRE_DAYS = 14
 
 DAILY_VOICE_POINTS_LIMIT = 500
 DAILY_TEXT_POINTS_LIMIT = 600
 DAY_UTC_OFFSET_HOURS = 5
+PAYOUT_MAX_AMOUNT = 1000000

@@ -3,7 +3,7 @@ import os
 import time
 from datetime import datetime, timedelta, timezone
 from config import (
-    USERS_F, SHOP_F, STAFF_F, SETTINGS_F, ORDERS_F, SALARY_LOG_F, WARNS_F, DAY_UTC_OFFSET_HOURS,
+    USERS_F, SHOP_F, STAFF_F, SETTINGS_F, ORDERS_F, SALARY_LOG_F, WARNS_F, PAYOUTS_F, DAY_UTC_OFFSET_HOURS,
 )
 
 DEFAULT_USER = {"points": 0, "salary": 0, "warnings": 0, "messages": 0, "voice_time": 0, "xp": 0,
@@ -11,7 +11,7 @@ DEFAULT_USER = {"points": 0, "salary": 0, "warnings": 0, "messages": 0, "voice_t
                 "day": "", "day_voice": 0, "day_text": 0}
 DEFAULT_SETTINGS = {
     "purchase_log": None, "mod_log": None, "pay_log": None,
-    "message_log": None, "voice_log": None,
+    "message_log": None, "voice_log": None, "payout_builder_channel": None, "payout_tester_channel": None,
     "builder_role": None, "tester_role": None,
     "curator_role": None, "responsible_role": None,
 }
@@ -307,3 +307,13 @@ def decay_warns(days):
     if out:
         _commit(WARNS_F)
     return out
+
+
+def payout_done(mid):
+    return str(mid) in _data(PAYOUTS_F).get("processed", {})
+
+
+def payout_mark(mid, uid, gross, net):
+    _data(PAYOUTS_F).setdefault("processed", {})[str(mid)] = {
+        "uid": uid, "gross": gross, "net": net, "ts": time.time()}
+    _commit(PAYOUTS_F)

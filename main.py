@@ -6,7 +6,7 @@ from bot_instance import bot
 import config
 import storage
 
-COGS = ["cogs.economy", "cogs.moderation", "cogs.economy_admin", "cogs.admin_panel", "cogs.extras", "cogs.logs", "cogs.shop", "cogs.staff_tools"]
+COGS = ["cogs.economy", "cogs.moderation", "cogs.economy_admin", "cogs.admin_panel", "cogs.extras", "cogs.logs", "cogs.shop", "cogs.staff_tools", "cogs.payouts"]
 _synced = False
 
 

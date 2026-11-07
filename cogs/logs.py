@@ -57,7 +57,7 @@ class LogsCog(commands.Cog):
     def __init__(self, bot): self.bot = bot
 
     def _is_log_channel(self, channel_id):
-        return channel_id in get_settings().values()
+        return channel_id in {v for k, v in get_settings().items() if k.endswith("_log") and v}
 
     @commands.Cog.listener()
     async def on_raw_message_delete(self, payload: discord.RawMessageDeleteEvent):

@@ -19,6 +19,8 @@ CHANNELS = [
     ("pay_log",      "Канал переводов", "Переводы",  "💸"),
     ("message_log",  "Канал сообщений", "Сообщения", "💬"),
     ("voice_log",    "Канал войса",     "Войс",      "🎙️"),
+    ("payout_builder_channel", "Канал выплат строителей", "Выплаты: строители", "🏗️"),
+    ("payout_tester_channel",  "Канал выплат тестеров",   "Выплаты: тестеры",  "🧪"),
 ]
 ROLES = [
     ("builder_role", "Роль строителей", "Строители", "🏗️"),
@@ -76,7 +78,7 @@ def build_embed(guild: discord.Guild, user: discord.abc.User) -> discord.Embed:
         e.set_thumbnail(url=guild.icon.url)
 
     e.add_field(
-        name="📡 Каналы логов",
+        name="📡 Каналы",
         value="\n".join(f"{emoji} **{short}:** {_chan(guild, s[key])}"
                         for key, _, short, emoji in CHANNELS),
         inline=True)
