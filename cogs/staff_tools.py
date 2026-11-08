@@ -1,9 +1,10 @@
 import time
+from datetime import datetime, timedelta, timezone
 import discord
-from discord.ext import commands
+from discord.ext import commands, tasks
 from discord import app_commands
-from config import PERMS_CURATOR
-from storage import get_user, get_settings
+from config import PERMS_CURATOR, DAY_UTC_OFFSET_HOURS, SALARY_REPORT_DAY, SALARY_REPORT_HOUR
+from storage import get_user, get_settings, set_setting
 from helpers import is_curator
 
 RED = 0x9B111E
@@ -114,8 +115,102 @@ class ActivityView(discord.ui.View):
             pass
 
 
+REPORT_BRANCHES = (
+    ("builder", "payout_builder_channel", "Строители"),
+    ("tester", "payout_tester_channel", "Тестеры"),
+)
+
+
+def num(v):
+    return f"{v:,}".replace(",", " ")
+
+
+def build_salary_report(guild: discord.Guild, branch: str, title: str):
+    role = guild.get_role(get_settings().get(f"{branch}_role") or 0)
+    if role is None:
+        return None
+    rows = sorted(((m, get_user(m.id)["salary"]) for m in role.members if not m.bot),
+                  key=lambda r: r[1], reverse=True)
+    total = sum(v for _, v in rows)
+
+    e = discord.Embed(title=f"💰 Заработанная ЗП — {title}", color=RED, timestamp=discord.utils.utcnow())
+    head = f"Итоговые суммы на {discord.utils.format_dt(discord.utils.utcnow(), 'D')}\n▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬\n"
+    if not rows:
+        e.description = head + "В этой ветке пока никого нет."
+        return e
+
+    lines, size = [], len(head)
+    for n, (m, v) in enumerate(rows, start=1):
+        line = f"`{n}.` {m.mention} — **{num(v)}** ЗП"
+        if size + len(line) + 1 > 3800:
+            lines.append(f"… и ещё {len(rows) - n + 1}")
+            break
+        lines.append(line)
+        size += len(line) + 1
+    e.description = head + "\n".join(lines)
+    e.set_footer(text=f"Всего: {num(total)} ЗП · Если сумма не совпадает, напишите куратору")
+    return e
+
+
 class StaffToolsCog(commands.Cog):
     def __init__(self, bot): self.bot = bot
+
+    async def cog_load(self):
+        self.salary_report_loop.start()
+
+    def cog_unload(self):
+        self.salary_report_loop.cancel()
+
+    async def send_salary_reports(self, guild: discord.Guild):
+        s = get_settings()
+        results = {}
+        for branch, key, title in REPORT_BRANCHES:
+            channel = guild.get_channel(s.get(key) or 0)
+            embed = build_salary_report(guild, branch, title)
+            if channel is None or embed is None:
+                results[title] = "канал или роль ветки не настроены"
+                continue
+            try:
+                await channel.send(embed=embed, allowed_mentions=discord.AllowedMentions.none())
+                results[title] = "отправлено"
+            except discord.HTTPException:
+                results[title] = "не удалось отправить (проверьте права бота в канале)"
+        return results
+
+    @tasks.loop(minutes=10)
+    async def salary_report_loop(self):
+        now = datetime.now(timezone(timedelta(hours=DAY_UTC_OFFSET_HOURS)))
+        if (now.day, now.hour) < (SALARY_REPORT_DAY, SALARY_REPORT_HOUR):
+            return
+        month_key = now.strftime("%Y-%m")
+        if get_settings().get("salary_report_last") == month_key:
+            return
+        sent = False
+        for guild in self.bot.guilds:
+            results = await self.send_salary_reports(guild)
+            sent = sent or any(v == "отправлено" for v in results.values())
+        if sent:
+            set_setting("salary_report_last", month_key)
+
+    @salary_report_loop.before_loop
+    async def _before_salary_report(self): await self.bot.wait_until_ready()
+
+    @app_commands.command(name="salary_report", description="Отчёт о заработанной ЗП по веткам (куратор)")
+    @app_commands.guild_only()
+    @app_commands.default_permissions(**PERMS_CURATOR)
+    @app_commands.describe(send="Отправить в каналы строителей и тестеров (иначе покажу только вам)")
+    async def salary_report_cmd(self, inter: discord.Interaction, send: bool = False):
+        if not is_curator(inter.user):
+            return await inter.response.send_message("❌ Нет прав.", ephemeral=True)
+        if not send:
+            embeds = [e for e in (build_salary_report(inter.guild, b, t) for b, _, t in REPORT_BRANCHES) if e]
+            if not embeds:
+                return await inter.response.send_message(
+                    "❌ Роли строителей и тестеров не настроены (их задаёт владелец в `/admin`).", ephemeral=True)
+            return await inter.response.send_message(embeds=embeds, ephemeral=True)
+        await inter.response.defer(ephemeral=True)
+        results = await self.send_salary_reports(inter.guild)
+        await inter.followup.send("\n".join(f"**{t}:** {r}" for t, r in results.items()), ephemeral=True)
 
     @app_commands.command(name="activity", description="Активность строителей и тестеров (куратор)")
     @app_commands.guild_only()

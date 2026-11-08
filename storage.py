@@ -12,6 +12,7 @@ DEFAULT_USER = {"points": 0, "salary": 0, "warnings": 0, "messages": 0, "voice_t
 DEFAULT_SETTINGS = {
     "purchase_log": None, "mod_log": None, "pay_log": None,
     "message_log": None, "voice_log": None, "payout_builder_channel": None, "payout_tester_channel": None,
+    "salary_report_last": None,
     "builder_role": None, "tester_role": None,
     "curator_role": None, "responsible_role": None,
 }
