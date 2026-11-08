@@ -1,6 +1,6 @@
 import discord
 from discord.ext import commands
-from config import PAYOUT_MAX_AMOUNT
+from config import PAYOUT_MAX_AMOUNT, PAYOUT_REPLY_IN_CHANNEL
 from storage import get_settings, get_user, add_salary, log_salary, payout_done, payout_mark, flush
 from helpers import is_curator, is_owner, is_staff, send_log
 from payout_parser import parse_payout, find_candidates
@@ -155,20 +155,22 @@ class PayoutsCog(commands.Cog):
         e.add_field(name="Баланс ЗП", value=num(get_user(member.id)["salary"]), inline=True)
         if pen:
             e.add_field(name="Штраф за выговоры", value=f"−{pen}% (в сообщении: {num(amount)})", inline=False)
-        await self.respond(message, "✅", e)
+        log = e.copy()
+        log.url = message.jump_url
+        log.add_field(name="Источник", value=message.author.mention, inline=True)
+        if branch:
+            log.add_field(name="Ветка", value=BRANCH_NAMES[branch], inline=True)
+        log.add_field(name="Сообщение", value=f"[перейти]({message.jump_url})", inline=True)
+        log_channel_id = get_settings().get("pay_log")
+        sent = await send_log(self.bot, "pay_log", log)
 
-        if get_settings().get("pay_log") != message.channel.id:
-            log = discord.Embed(title="🧾 Выплата по сообщению", color=GREEN, timestamp=discord.utils.utcnow(),
-                                url=message.jump_url)
-            log.add_field(name="Получатель", value=f"{member.mention}\n`{member.id}`", inline=True)
-            log.add_field(name="Сумма", value=f"**{num(net)}** ЗП", inline=True)
-            log.add_field(name="Источник", value=message.author.mention, inline=True)
-            if branch:
-                log.add_field(name="Ветка", value=BRANCH_NAMES[branch], inline=True)
-            if pen:
-                log.add_field(name="Штраф", value=f"−{pen}% (было {num(amount)})", inline=True)
-            log.add_field(name="Сообщение", value=f"[перейти]({message.jump_url})", inline=False)
-            await send_log(self.bot, "pay_log", log)
+        if sent and (not PAYOUT_REPLY_IN_CHANNEL or log_channel_id == message.channel.id):
+            try:
+                await message.add_reaction("✅")
+            except discord.HTTPException:
+                pass
+        else:
+            await self.respond(message, "✅", e)
 
     async def respond(self, message, emoji, embed):
         try:

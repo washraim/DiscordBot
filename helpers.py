@@ -35,11 +35,12 @@ def is_staff(m):
 async def send_log(client, key, embed):
     ch_id = get_settings().get(key)
     if not ch_id:
-        return
+        return False
     ch = client.get_channel(ch_id)
     if ch is None:
-        return
+        return False
     try:
         await ch.send(embed=embed, allowed_mentions=discord.AllowedMentions.none())
     except discord.HTTPException:
-        pass
+        return False
+    return True
