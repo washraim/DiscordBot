@@ -5,7 +5,7 @@ from storage import all_users, get_user, transfer
 from helpers import is_curator, is_responsible, is_owner, is_staff, send_log
 from storage import get_settings
 from image_gen import XP_PER_LEVEL
-from config import DAILY_VOICE_POINTS_LIMIT, DAILY_TEXT_POINTS_LIMIT
+from config import DAILY_VOICE_POINTS_LIMIT, DAILY_TEXT_POINTS_LIMIT, WARN_EXPIRE_DAYS
 
 RED = 0x9B111E
 MEDALS = {1: "🥇", 2: "🥈", 3: "🥉"}
@@ -104,59 +104,102 @@ class TopView(discord.ui.View):
             pass
 
 
-def build_help_embed(user) -> discord.Embed:
-    e = discord.Embed(
-        title="📖 Справка по боту",
-        description="Список команд и способы заработка.\n▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬",
-        color=RED,
-    )
-    e.add_field(
-        name="👤 Для всех",
-        value=(
-            "`/profile` — карточка профиля\n"
-            "`/balance` — баллы и ЗП\n"
-            "`/top` — рейтинги сервера\n"
-            "`/pay` — перевести баллы или ЗП\n"
-            "`/shop` — магазин (игроков или персонала, в зависимости от роли)\n"
-            "`/orders` — ваши заказы и их статусы\n"
-            "`/help` — эта справка"
-        ),
-        inline=False,
-    )
-    e.add_field(
-        name="💰 Как заработать",
-        value=(
-            f"• **Сообщения:** 1 балл за каждые 5 сообщений, не больше {DAILY_TEXT_POINTS_LIMIT} баллов в сутки\n"
-            f"• **Войс:** 2 балла и XP за каждые 5 минут с включённым микрофоном, не больше {DAILY_VOICE_POINTS_LIMIT} баллов в сутки\n"
-            f"• **Уровень:** новый уровень каждые {num(XP_PER_LEVEL)} XP\n"
-            "• **ЗП:** выдаёт куратор за работу, штраф за выговоры до −50%"
-        ),
-        inline=False,
-    )
-    if is_staff(user):
-        e.add_field(name="🛠️ Для персонала", value="`/warnings` — история выговоров участника", inline=False)
-    if is_responsible(user):
-        e.add_field(name="🛡️ Для ответственных", value="`/warn` — выдать выговор", inline=False)
-    if is_curator(user):
-        e.add_field(
-            name="👑 Для кураторов",
-            value=(
-                "`/adm_shop` — магазины: товары, лимиты (заказы обрабатываются кнопками в канале покупок)\n"
-                "`/economy` — баллы и ЗП: выдача, изъятие, обнуление, ведомость\n"
-                "`/activity` — активность строителей и тестеров\n"
-                "**Выплаты** — в канале выплат своей ветки эмбед или обычный текст вида `Выплата: 5000` и `Ник: ...` (или `Выплата 5000 Steve`) автоматически начисляет ЗП\n"
-                "`/warn_clear` — снять выговор (кроме себя)"
-            ),
-            inline=False,
-        )
-    if is_owner(user):
-        e.add_field(
-            name="🔑 Для владельца",
-            value="`/admin` — каналы логов, роли веток, должности персонала",
-            inline=False,
-        )
-    e.set_footer(text="Ashra Team • Вместе сильнее")
-    return e
+HELP_CATEGORIES = [
+    ("main", "👤", "Основное", None),
+    ("earn", "💰", "Заработок", None),
+    ("shop", "🛒", "Магазин и заказы", None),
+    ("staff", "🛠️", "Персонал", is_staff),
+    ("mod", "⚖️", "Модерация", is_responsible),
+    ("curator", "👑", "Кураторы", is_curator),
+    ("owner", "🔑", "Владелец", is_owner),
+]
+
+
+def help_text(key, user):
+    emoji, label = next((e, lb) for k, e, lb, _ in HELP_CATEGORIES if k == key)
+    if key == "main":
+        lines = [
+            "`/profile` — Карточка профиля",
+            "`/balance` — Баллы и ЗП",
+            "`/top` — Рейтинги сервера",
+            "`/pay` — Перевести баллы или ЗП участнику",
+            "`/help` — Эта справка",
+        ]
+    elif key == "earn":
+        lines = [
+            f"**Сообщения** — 1 балл за каждые 5 сообщений, до {DAILY_TEXT_POINTS_LIMIT} баллов в сутки",
+            f"**Войс** — 2 балла и XP за 5 минут с включённым микрофоном, до {DAILY_VOICE_POINTS_LIMIT} баллов в сутки",
+            f"**Уровень** — новый уровень каждые {num(XP_PER_LEVEL)} XP",
+            "**ЗП** — начисляют кураторы за работу, штраф за выговоры до −50%",
+        ]
+    elif key == "shop":
+        lines = [
+            "`/shop` — Магазин игроков или персонала (по вашей роли)",
+            "`/orders` — Ваши заказы и их статусы",
+            "О статусе заказа приходит уведомление в личные сообщения.",
+        ]
+    elif key == "staff":
+        lines = [
+            "`/warnings` — История выговоров участника",
+            "**Выплаты** — в канале выплат своей ветки сообщение со строками `Выплата: 5000` и `Ник: ...` "
+            "(или `Выплата 5000 Steve`) автоматически начисляет ЗП",
+            "**Отчёт о ЗП** — 27-го числа бот присылает в канал ветки суммы заработанной ЗП",
+        ]
+    elif key == "mod":
+        lines = ["`/warn` — Выдать выговор"]
+        if is_curator(user):
+            lines.append("`/warn_clear` — Снять выговор (кроме себя)")
+        lines.append(f"Выговоры снимаются автоматически: 1 за {WARN_EXPIRE_DAYS} дн. без нарушений")
+    elif key == "curator":
+        lines = [
+            "`/economy` — Баллы и ЗП: выдача, изъятие, обнуление, ведомость",
+            "`/adm_shop` — Магазины: товары и лимиты",
+            "`/salary_report` — Отчёт о заработанной ЗП по веткам",
+            "`/activity` — Активность строителей и тестеров",
+            "Заказы обрабатываются кнопками в канале покупок.",
+        ]
+    else:
+        lines = ["`/admin` — Каналы логов и выплат, роли веток, должности персонала"]
+    return f"### {emoji} {label}\n\n" + "\n".join(lines) + "\n\n-# Ashra Team • Вместе сильнее"
+
+
+class HelpSelect(discord.ui.Select):
+    def __init__(self, user, owner):
+        options = [discord.SelectOption(label=label, value=key, emoji=emoji)
+                   for key, emoji, label, check in HELP_CATEGORIES if check is None or check(user)]
+        super().__init__(placeholder="Выберите категорию", options=options)
+        self.owner = owner
+
+    async def callback(self, i: discord.Interaction):
+        self.owner.category = self.values[0]
+        self.owner.build()
+        await i.response.edit_message(view=self.owner)
+
+
+class HelpView(discord.ui.LayoutView):
+    def __init__(self, inter: discord.Interaction, category="main"):
+        super().__init__(timeout=180)
+        self.inter, self.category = inter, category
+        self.select = None
+        self.build()
+
+    def build(self):
+        self.clear_items()
+        container = discord.ui.Container()
+        container.add_item(discord.ui.TextDisplay(help_text(self.category, self.inter.user)))
+        row = discord.ui.ActionRow()
+        self.select = HelpSelect(self.inter.user, self)
+        row.add_item(self.select)
+        container.add_item(row)
+        self.add_item(container)
+
+    async def on_timeout(self):
+        if self.select is not None:
+            self.select.disabled = True
+        try:
+            await self.inter.edit_original_response(view=self)
+        except discord.HTTPException:
+            pass
 
 
 class ExtrasCog(commands.Cog):
@@ -164,7 +207,7 @@ class ExtrasCog(commands.Cog):
 
     @app_commands.command(name="help", description="Справка по командам бота")
     async def help_cmd(self, inter: discord.Interaction):
-        await inter.response.send_message(embed=build_help_embed(inter.user), ephemeral=True)
+        await inter.response.send_message(view=HelpView(inter), ephemeral=True)
 
     @app_commands.command(name="top", description="Рейтинги сервера")
     @app_commands.guild_only()
