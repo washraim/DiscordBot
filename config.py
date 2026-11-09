@@ -26,6 +26,7 @@ FONT_REG  = BASE_DIR / "Montserrat-Regular.ttf"
 PERMS_OWNER       = {"administrator": True}
 PERMS_CURATOR     = {"manage_messages": True}
 PERMS_RESPONSIBLE = {"moderate_members": True}
+PERMS_STAFF = {"manage_events": True}
 
 ORDERS_F     = DATA / "orders.json"
 SALARY_LOG_F = DATA / "salary_log.json"

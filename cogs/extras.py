@@ -109,7 +109,7 @@ HELP_CATEGORIES = [
     ("earn", "💰", "Заработок", None),
     ("shop", "🛒", "Магазин и заказы", None),
     ("staff", "🛠️", "Персонал", is_staff),
-    ("mod", "⚖️", "Модерация", is_responsible),
+    ("mod", "🎀", "Ответственные", is_responsible),
     ("curator", "👑", "Кураторы", is_curator),
     ("owner", "🔑", "Владелец", is_owner),
 ]

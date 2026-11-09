@@ -5,7 +5,7 @@ from storage import (
     get_settings, set_setting, get_staff, staff_levels, add_staff_level, remove_staff_level, all_users, get_shop
 )
 from helpers import is_owner, member_levels
-from config import OWNER_ID, PERMS_OWNER, PERMS_CURATOR, PERMS_RESPONSIBLE
+from config import OWNER_ID, PERMS_OWNER, PERMS_CURATOR, PERMS_RESPONSIBLE, PERMS_STAFF
 
 RED = 0x9B111E
 LEVELS = {
@@ -158,10 +158,16 @@ class ChannelPick(OwnerView):
 
 
 ROLE_RIGHTS = {
-    "curator_role": {**PERMS_CURATOR, **PERMS_RESPONSIBLE},
-    "responsible_role": dict(PERMS_RESPONSIBLE),
+    "curator_role": {**PERMS_CURATOR, **PERMS_RESPONSIBLE, **PERMS_STAFF},
+    "responsible_role": {**PERMS_RESPONSIBLE, **PERMS_STAFF},
+    "builder_role": dict(PERMS_STAFF),
+    "tester_role": dict(PERMS_STAFF),
 }
-RIGHT_NAMES = {"manage_messages": "Управление сообщениями", "moderate_members": "Модерация участников"}
+RIGHT_NAMES = {
+    "manage_messages": "Управление сообщениями",
+    "moderate_members": "Модерация участников",
+    "manage_events": "Управление событиями",
+}
 
 
 async def ensure_role_rights(role, key):
@@ -353,6 +359,20 @@ class AdminView(OwnerView):
     @discord.ui.button(label="Снять должность", emoji="❌", style=discord.ButtonStyle.danger, row=3)
     async def g3(self, i, b):
         await i.response.send_message("С кого снять должность?", view=RevokeView(self), ephemeral=True)
+
+    @discord.ui.button(label="Права ролям", emoji="🔧", style=discord.ButtonStyle.secondary, row=4)
+    async def apply_rights(self, i: discord.Interaction, b):
+        await i.response.defer(ephemeral=True)
+        s = get_settings()
+        lines = []
+        for key, title, _short, _emoji in ROLES:
+            role = i.guild.get_role(s.get(key) or 0)
+            if role is None:
+                lines.append(f"**{title}:** не привязана")
+                continue
+            note = (await ensure_role_rights(role, key)).strip()
+            lines.append(f"{role.mention}: " + (note or "нужные права уже есть"))
+        await i.followup.send("\n".join(lines), ephemeral=True)
 
     @discord.ui.button(label="Обновить", emoji="🔄", style=discord.ButtonStyle.secondary, row=4)
     async def reload(self, i: discord.Interaction, b):

@@ -2,7 +2,7 @@ import time
 import discord
 from discord.ext import commands, tasks
 from discord import app_commands
-from config import PERMS_CURATOR, PERMS_RESPONSIBLE, WARN_EXPIRE_DAYS
+from config import PERMS_CURATOR, PERMS_RESPONSIBLE, PERMS_STAFF, WARN_EXPIRE_DAYS
 from storage import (
     get_user, set_user, add_warn_record, warn_records, clear_warn_record, decay_warns,
 )
@@ -90,6 +90,7 @@ class ModerationCog(commands.Cog):
         await inter.response.send_modal(WarnModal(member))
 
     @app_commands.command(name="warnings", description="История выговоров участника")
+    @app_commands.default_permissions(**PERMS_STAFF)
     async def warnings_cmd(self, inter: discord.Interaction, member: discord.Member):
         if not is_staff(inter.user):
             return await inter.response.send_message("❌ Выговоры доступны только персоналу.", ephemeral=True)
