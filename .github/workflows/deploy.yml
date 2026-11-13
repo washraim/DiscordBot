@@ -36,4 +36,4 @@ jobs:
             -o StrictHostKeyChecking=yes -o UserKnownHostsFile="$hosts_file" \
             -o HostKeyAlgorithms=ssh-ed25519 \
             -o ConnectTimeout=20 -o ServerAliveInterval=15 -o ServerAliveCountMax=4 \
-            discordbot-deploy@195.133.35.40 deploy
+            discordbot-deploy@195.133.35.90 deploy
