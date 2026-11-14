@@ -3,7 +3,7 @@ import os
 import time
 from datetime import datetime, timedelta, timezone
 from config import (
-    USERS_F, SHOP_F, STAFF_F, SETTINGS_F, ORDERS_F, SALARY_LOG_F, WARNS_F, PAYOUTS_F, DAY_UTC_OFFSET_HOURS,
+    USERS_F, SHOP_F, STAFF_F, SETTINGS_F, ORDERS_F, SALARY_LOG_F, WARNS_F, PAYOUTS_F, SALARY_ARCHIVE_F, DAY_UTC_OFFSET_HOURS,
 )
 
 DEFAULT_USER = {"points": 0, "salary": 0, "warnings": 0, "messages": 0, "voice_time": 0, "xp": 0,
@@ -13,6 +13,7 @@ DEFAULT_SETTINGS = {
     "purchase_log": None, "mod_log": None, "pay_log": None,
     "message_log": None, "voice_log": None, "payout_builder_channel": None, "payout_tester_channel": None,
     "salary_report_last": None,
+    "error_log": None, "salary_period_start": 0,
     "builder_role": None, "tester_role": None,
     "curator_role": None, "responsible_role": None,
 }
@@ -250,15 +251,32 @@ def delete_order(oid):
     _commit(ORDERS_F)
 
 
+def all_orders():
+    return [dict(o) for o in _orders()["items"].values()]
+
+
 def orders_of(uid):
     mine = [dict(o) for o in _orders()["items"].values() if o.get("user_id") == uid]
     return sorted(mine, key=lambda o: o["created"], reverse=True)
 
 
-def log_salary(uid, gross, net, by, kind="pay"):
+def log_salary(uid, gross, net, by, kind="pay", src="economy", ref=None):
     _data(SALARY_LOG_F).setdefault("entries", []).append(
-        {"ts": time.time(), "uid": uid, "gross": gross, "net": net, "by": by, "kind": kind})
+        {"ts": time.time(), "uid": uid, "gross": gross, "net": net, "by": by, "kind": kind,
+         "src": src, "ref": ref})
     _commit(SALARY_LOG_F)
+
+
+def salary_entries_of(uid, since_ts=0):
+    mine = [e for e in _data(SALARY_LOG_F).get("entries", []) if e["uid"] == uid and e["ts"] >= since_ts]
+    return sorted(mine, key=lambda e: e["ts"], reverse=True)
+
+
+def archive_salary(by, branch, rows, total):
+    _data(SALARY_ARCHIVE_F).setdefault("closed", []).append(
+        {"ts": time.time(), "by": by, "branch": branch, "total": total, "count": len(rows),
+         "rows": [[uid, amount] for uid, amount in rows]})
+    _commit(SALARY_ARCHIVE_F)
 
 
 def salary_entries(since_ts=0):
@@ -314,7 +332,41 @@ def payout_done(mid):
     return str(mid) in _data(PAYOUTS_F).get("processed", {})
 
 
-def payout_mark(mid, uid, gross, net):
+def payout_mark(mid, uid, gross, net, src_channel=None):
     _data(PAYOUTS_F).setdefault("processed", {})[str(mid)] = {
-        "uid": uid, "gross": gross, "net": net, "ts": time.time()}
+        "uid": uid, "gross": gross, "net": net, "ts": time.time(), "src_channel": src_channel,
+        "log_channel_id": None, "log_message_id": None, "cancelled": None}
     _commit(PAYOUTS_F)
+
+
+def payout_get(mid):
+    rec = _data(PAYOUTS_F).get("processed", {}).get(str(mid))
+    return dict(rec) if rec else None
+
+
+def payout_set_log(mid, channel_id, message_id):
+    rec = _data(PAYOUTS_F).get("processed", {}).get(str(mid))
+    if rec is not None:
+        rec["log_channel_id"], rec["log_message_id"] = channel_id, message_id
+        _commit(PAYOUTS_F)
+
+
+def payout_cancel(mid, by, reason=None):
+    rec = _data(PAYOUTS_F).get("processed", {}).get(str(mid))
+    if rec is None:
+        return None, "missing"
+    if rec.get("cancelled"):
+        return dict(rec), "already"
+    u = get_user(rec["uid"])
+    take = min(u["salary"], rec["net"])
+    if take == rec["net"] or not rec["net"]:
+        gross_part = rec["gross"] if take == rec["net"] else 0
+    else:
+        gross_part = rec["gross"] * take // rec["net"]
+    set_user(rec["uid"], salary=u["salary"] - take)
+    log_salary(rec["uid"], gross_part, take, by, "cancel", "cancel")
+    rec["cancelled"] = {"by": by, "ts": time.time(), "returned": take,
+                        "shortfall": rec["net"] - take, "reason": reason}
+    _commit(PAYOUTS_F)
+    flush()
+    return dict(rec), "ok"

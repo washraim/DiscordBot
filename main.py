@@ -5,6 +5,7 @@ from discord.ext import tasks
 from bot_instance import bot
 import config
 import storage
+import error_reporting
 
 COGS = ["cogs.economy", "cogs.moderation", "cogs.economy_admin", "cogs.admin_panel", "cogs.extras", "cogs.logs", "cogs.shop", "cogs.staff_tools", "cogs.payouts"]
 _synced = False
@@ -29,6 +30,7 @@ async def sync_guild(guild: discord.Guild):
 
 @bot.event
 async def setup_hook():
+    error_reporting.install(bot)
     for cog in COGS:
         try:
             await bot.load_extension(cog)

@@ -6,6 +6,7 @@ from discord import app_commands
 from config import BG_PATH, DAILY_VOICE_POINTS_LIMIT, DAILY_TEXT_POINTS_LIMIT
 from storage import get_user, add_stats, all_users, reserve_daily
 from helpers import is_responsible
+from error_reporting import guard
 from image_gen import generate_profile_card, warm_up, OUT_EXT
 
 XP_COOLDOWN = 30
@@ -48,6 +49,7 @@ class EconomyCog(commands.Cog):
         add_stats(uid, messages=1, xp=XP_PER_MESSAGE, points=pts, last_msg=time.time())
 
     @tasks.loop(minutes=5)
+    @guard("voice_loop")
     async def voice_loop(self):
         for guild in self.bot.guilds:
             afk = guild.afk_channel

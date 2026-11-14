@@ -1,14 +1,15 @@
 import datetime
+import io
 import time
 import discord
 from discord.ext import commands
 from discord import app_commands
 from storage import (
     get_user, add_points, remove_points, add_salary, remove_salary,
-    reset_salary, get_settings, all_users, log_salary, salary_entries,
+    reset_salary, get_settings, set_setting, all_users, log_salary, salary_entries, archive_salary,
 )
 from config import PERMS_CURATOR
-from helpers import is_curator, is_owner, send_log
+from helpers import is_curator, is_owner, send_log, send_log_msg
 
 RED = 0x9B111E
 GREEN = 0x2ECC71
@@ -152,47 +153,89 @@ class TargetPick(CuratorView):
         await i.response.send_modal(AmountModal(self.action_key, target, self.panel))
 
 
+CLOSE_BRANCHES = {"builder": "Строители", "tester": "Тестеры", "both": "Обе ветки"}
+
+
+def close_targets(guild, choice):
+    keys = ("builder", "tester") if choice == "both" else (choice,)
+    s = get_settings()
+    ids, found = [], False
+    for key in keys:
+        role = guild.get_role(s.get(f"{key}_role") or 0)
+        if role is None:
+            continue
+        found = True
+        for m in role.members:
+            if not m.bot and m.id not in ids and get_user(m.id)["salary"] > 0:
+                ids.append(m.id)
+    return ids, found
+
+
 class ResetBranchView(CuratorView):
     def __init__(self, panel):
         super().__init__(timeout=60)
         self.panel = panel
 
-    @discord.ui.select(placeholder="Ветка", options=[
+    @discord.ui.select(placeholder="Чью ЗП отметить выплаченной", options=[
         discord.SelectOption(label="Строители", value="builder", emoji="🏗️"),
         discord.SelectOption(label="Тестеры", value="tester", emoji="🧪"),
+        discord.SelectOption(label="Обе ветки", value="both", emoji="👥"),
     ])
     async def pick(self, i: discord.Interaction, sel):
-        role_id = get_settings().get(f"{sel.values[0]}_role")
-        role = i.guild.get_role(role_id) if role_id else None
-        if not role:
+        choice = sel.values[0]
+        targets, found = close_targets(i.guild, choice)
+        if not found:
             return await i.response.edit_message(
                 content="❌ Роль ветки не настроена или удалена (её задаёт владелец в `/admin`).", view=None)
-        targets = [m.id for m in role.members if get_user(m.id)["salary"] > 0]
         if not targets:
-            return await i.response.edit_message(content="Ни у кого из этой ветки нет ЗП.", view=None)
+            return await i.response.edit_message(content="Ни у кого из выбранных нет ЗП.", view=None)
         total = sum(get_user(u)["salary"] for u in targets)
         await i.response.edit_message(
-            content=(f"⚠️ Обнулить ЗП у **{len(targets)}** чел. (роль «{role.name}»), "
-                     f"всего **{num(total)}** ЗП? Это нельзя отменить."),
-            view=ConfirmResetView(targets, role.name, total, self.panel))
+            content=(f"⚠️ Отметить ЗП выплаченной: **{len(targets)}** чел., всего **{num(total)}** ЗП ({CLOSE_BRANCHES[choice]}).\n"
+                     "Бот сохранит архив и файл со списком, обнулит счётчики ЗП и начнёт новый период. "
+                     "Это нельзя отменить."),
+            view=ConfirmResetView(choice, self.panel))
 
 
 class ConfirmResetView(CuratorView):
-    def __init__(self, targets, role_name, total, panel):
+    def __init__(self, choice, panel):
         super().__init__(timeout=60)
-        self.targets, self.role_name, self.total, self.panel = targets, role_name, total, panel
+        self.choice, self.panel = choice, panel
 
-    @discord.ui.button(label="Да, обнулить", style=discord.ButtonStyle.danger)
+    @discord.ui.button(label="Да, выплачено", style=discord.ButtonStyle.danger)
     async def yes(self, i: discord.Interaction, b):
-        count = reset_salary(self.targets)
-        await i.response.edit_message(content=f"✅ Обнулено у {count} чел.", view=None)
-        self.stop()
-        e = discord.Embed(title="🧹 Обнуление ЗП", color=RED, timestamp=discord.utils.utcnow())
+        targets, _ = close_targets(i.guild, self.choice)
+        rows = sorted(((uid, get_user(uid)["salary"]) for uid in targets), key=lambda r: r[1], reverse=True)
+        if not rows:
+            return await i.response.edit_message(content="Ни у кого из выбранных нет ЗП.", view=None)
+        total = sum(v for _, v in rows)
+        await i.response.defer()
+
+        lines = ["Ник;ID;ЗП"]
+        for uid, amount in rows:
+            m = i.guild.get_member(uid)
+            name = (m.display_name if m else str(uid)).replace(";", ",")
+            lines.append(f"{name};{uid};{amount}")
+        lines.append(f"ИТОГО;;{total}")
+        data = "\n".join(lines).encode("utf-8-sig")
+        stamp = datetime.datetime.now().strftime("%Y-%m-%d")
+
+        archive_salary(i.user.id, CLOSE_BRANCHES[self.choice], rows, total)
+        count = reset_salary([uid for uid, _ in rows])
+        set_setting("salary_period_start", time.time())
+
+        e = discord.Embed(title="✅ ЗП выплачена, месяц закрыт", color=GREEN, timestamp=discord.utils.utcnow())
         e.add_field(name="Куратор", value=i.user.mention, inline=True)
-        e.add_field(name="Ветка", value=self.role_name, inline=True)
-        e.add_field(name="Затронуто", value=f"{count} чел.", inline=True)
-        e.add_field(name="Сумма", value=f"**{num(self.total)}** ЗП", inline=True)
-        await send_log(i.client, "pay_log", e)
+        e.add_field(name="Ветка", value=CLOSE_BRANCHES[self.choice], inline=True)
+        e.add_field(name="Выплачено", value=f"**{num(total)}** ЗП ({count} чел.)", inline=True)
+        e.add_field(name="Новый период", value=f"с {discord.utils.format_dt(discord.utils.utcnow(), 'f')}", inline=False)
+        await send_log_msg(i.client, "pay_log", e, file=discord.File(io.BytesIO(data), filename=f"zp_{stamp}.csv"))
+
+        await i.edit_original_response(
+            content=f"✅ Готово: обнулено у {count} чел., выплачено {num(total)} ЗП. Начался новый период.", view=None)
+        await i.followup.send("Копия списка выплат:", ephemeral=True,
+                              file=discord.File(io.BytesIO(data), filename=f"zp_{stamp}.csv"))
+        self.stop()
         await self.panel.refresh()
 
     @discord.ui.button(label="Отмена", style=discord.ButtonStyle.secondary)
@@ -201,13 +244,16 @@ class ConfirmResetView(CuratorView):
         self.stop()
 
 
-PERIODS = {"week": ("Неделя", 7), "month": ("Месяц", 30), "all": ("Всё время", None)}
+PERIODS = {"cycle": ("С закрытия месяца", None), "week": ("Неделя", 7), "month": ("Месяц", 30), "all": ("Всё время", None)}
 BRANCHES = {"all": "Все", "builder": "Строители", "tester": "Тестеры"}
 
 
 def build_payroll(guild: discord.Guild, period: str, branch: str) -> discord.Embed:
     label, days = PERIODS[period]
-    since = time.time() - days * 86400 if days else 0
+    if period == "cycle":
+        since = get_settings().get("salary_period_start") or 0
+    else:
+        since = time.time() - days * 86400 if days else 0
     entries = salary_entries(since)
 
     note = None
@@ -227,6 +273,9 @@ def build_payroll(guild: discord.Guild, period: str, branch: str) -> discord.Emb
         if en["kind"] == "pay":
             a["gross"] += en["gross"]
             a["net"] += en["net"]
+        elif en["kind"] == "cancel":
+            a["gross"] -= en["gross"]
+            a["net"] -= en["net"]
         else:
             a["taken"] += en["net"]
     rows = sorted(agg.items(), key=lambda kv: kv[1]["net"] - kv[1]["taken"], reverse=True)
@@ -235,6 +284,8 @@ def build_payroll(guild: discord.Guild, period: str, branch: str) -> discord.Emb
     head = f"Ветка: **{BRANCHES[branch]}**"
     if days:
         head += f" · с {discord.utils.format_dt(discord.utils.utcnow() - datetime.timedelta(days=days), 'd')}"
+    elif period == "cycle" and since:
+        head += f" · с {discord.utils.format_dt(datetime.datetime.fromtimestamp(since, datetime.timezone.utc), 'd')}"
     if note:
         e.description = head + "\n" + note
         return e
@@ -296,7 +347,7 @@ class BranchSelect(discord.ui.Select):
 class PayrollView(CuratorView):
     def __init__(self):
         super().__init__(timeout=180)
-        self.period, self.branch = "week", "all"
+        self.period, self.branch = "cycle", "all"
         self.rebuild()
 
     def rebuild(self):
@@ -347,7 +398,7 @@ class EconomyView(CuratorView):
         except discord.HTTPException:
             pass
 
-    @discord.ui.button(label="Обнулить ЗП ветки", emoji="🧹", style=discord.ButtonStyle.secondary, row=2)
+    @discord.ui.button(label="Выплачено, обнулить ЗП", emoji="🧹", style=discord.ButtonStyle.secondary, row=2)
     async def reset_btn(self, i, b):
         await i.response.send_message("Выберите ветку:", view=ResetBranchView(self), ephemeral=True)
 

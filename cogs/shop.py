@@ -1,11 +1,12 @@
 import time
 import discord
-from discord.ext import commands
+from discord.ext import commands, tasks
 from discord import app_commands
-from config import PERMS_CURATOR
+from config import PERMS_CURATOR, ORDER_REMIND_HOURS, ORDER_REMIND_REPEAT_HOURS
+from error_reporting import guard
 from storage import (
     get_user, set_user, get_shop, save_shop, get_settings,
-    create_order, get_order, update_order, delete_order, orders_of,
+    create_order, get_order, update_order, delete_order, orders_of, all_orders,
 )
 from helpers import is_curator, is_staff
 
@@ -628,6 +629,51 @@ class ShopAdminView(CuratorView):
 
 class ShopCog(commands.Cog):
     def __init__(self, bot): self.bot = bot
+
+    async def cog_load(self):
+        self.order_reminders.start()
+
+    def cog_unload(self):
+        self.order_reminders.cancel()
+
+    @tasks.loop(minutes=30)
+    @guard("order_reminders")
+    async def order_reminders(self):
+        now = time.time()
+        stale = [o for o in all_orders()
+                 if o["status"] == "new"
+                 and now - o["created"] >= ORDER_REMIND_HOURS * 3600
+                 and now - o.get("last_remind", 0) >= ORDER_REMIND_REPEAT_HOURS * 3600]
+        if not stale:
+            return
+        s = get_settings()
+        channel = self.bot.get_channel(s.get("purchase_log") or 0)
+        if channel is None:
+            return
+        stale.sort(key=lambda o: o["created"])
+        lines = []
+        for o in stale[:15]:
+            hours = int((now - o["created"]) // 3600)
+            link = ""
+            if o.get("channel_id") and o.get("message_id"):
+                link = f" · [открыть](https://discord.com/channels/{channel.guild.id}/{o['channel_id']}/{o['message_id']})"
+            lines.append(f"**#{o['id']}** {o['name']} · <@{o['user_id']}> · ждёт {hours} ч.{link}")
+        if len(stale) > 15:
+            lines.append(f"… и ещё {len(stale) - 15}")
+        e = discord.Embed(title="⏰ Необработанные заказы", description="\n".join(lines), color=ORANGE,
+                          timestamp=discord.utils.utcnow())
+        e.set_footer(text="Нажмите «Принять» или «Отклонить» под заказом в этом канале")
+        role = channel.guild.get_role(s.get("curator_role") or 0)
+        try:
+            await channel.send(content=role.mention if role else None, embed=e,
+                               allowed_mentions=discord.AllowedMentions(roles=True))
+        except discord.HTTPException:
+            return
+        for o in stale:
+            update_order(o["id"], last_remind=now)
+
+    @order_reminders.before_loop
+    async def _before_reminders(self): await self.bot.wait_until_ready()
 
     @app_commands.command(name="shop", description="Магазин")
     @app_commands.guild_only()

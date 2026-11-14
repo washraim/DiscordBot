@@ -6,6 +6,7 @@ from config import PERMS_CURATOR, PERMS_RESPONSIBLE, PERMS_STAFF, WARN_EXPIRE_DA
 from storage import (
     get_user, set_user, add_warn_record, warn_records, clear_warn_record, decay_warns,
 )
+from error_reporting import guard
 from helpers import is_curator, is_responsible, is_owner, is_staff, send_log
 
 RED = 0x9B111E
@@ -67,6 +68,7 @@ class ModerationCog(commands.Cog):
         self.warn_decay.cancel()
 
     @tasks.loop(hours=1)
+    @guard("warn_decay")
     async def warn_decay(self):
         for uid, rec in decay_warns(WARN_EXPIRE_DAYS):
             left = get_user(uid)["warnings"]

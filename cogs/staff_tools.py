@@ -3,9 +3,10 @@ from datetime import datetime, timedelta, timezone
 import discord
 from discord.ext import commands, tasks
 from discord import app_commands
-from config import PERMS_CURATOR, DAY_UTC_OFFSET_HOURS, SALARY_REPORT_DAY, SALARY_REPORT_HOUR
-from storage import get_user, get_settings, set_setting
-from helpers import is_curator
+from config import PERMS_CURATOR, PERMS_STAFF, DAY_UTC_OFFSET_HOURS, SALARY_REPORT_DAY, SALARY_REPORT_HOUR
+from storage import get_user, get_settings, set_setting, salary_entries_of
+from helpers import is_curator, is_staff
+from error_reporting import guard
 
 RED = 0x9B111E
 BRANCHES = {"all": "Все", "builder": "Строители", "tester": "Тестеры"}
@@ -152,6 +153,52 @@ def build_salary_report(guild: discord.Guild, branch: str, title: str):
     return e
 
 
+def history_line(en):
+    when = f"<t:{int(en['ts'])}:d>"
+    by = en.get("by")
+    who = f" · <@{by}>" if isinstance(by, int) else ""
+    if en["kind"] == "pay":
+        text = f"{when} · **+{num(en['net'])}** ЗП"
+        penalty = en["gross"] - en["net"]
+        if penalty:
+            text += f" · штраф −{num(penalty)}"
+        if en.get("src") == "message":
+            text += f" · по сообщению ([→]({en['ref']}))" if en.get("ref") else " · по сообщению"
+        else:
+            text += f" · выдал{who[2:]}" if who else ""
+        return text
+    if en["kind"] == "cancel":
+        return f"{when} · ↩️ **−{num(en['net'])}** ЗП · выплата отменена" + (" (автоматически)" if by == "auto" else who)
+    return f"{when} · ➖ **−{num(en['net'])}** ЗП · изъято{who}"
+
+
+def build_myzp(member) -> discord.Embed:
+    u = get_user(member.id)
+    since = get_settings().get("salary_period_start") or 0
+    entries = salary_entries_of(member.id)
+    period = [e for e in entries if e["ts"] >= since]
+    earned = (sum(e["net"] for e in period if e["kind"] == "pay")
+              - sum(e["net"] for e in period if e["kind"] == "cancel"))
+    penalty = (sum(e["gross"] - e["net"] for e in period if e["kind"] == "pay")
+               - sum(e["gross"] - e["net"] for e in period if e["kind"] == "cancel"))
+    taken = sum(e["net"] for e in period if e["kind"] == "take")
+
+    e = discord.Embed(title="🧾 Моя ЗП", color=RED, timestamp=discord.utils.utcnow())
+    e.set_thumbnail(url=member.display_avatar.url)
+    e.add_field(name="На счёте", value=f"**{num(u['salary'])}** ЗП", inline=True)
+    e.add_field(name="Начислено за период", value=f"{num(earned)} ЗП", inline=True)
+    e.add_field(name="Штрафы за период", value=f"{num(penalty)} ЗП", inline=True)
+    if taken:
+        e.add_field(name="Изъято за период", value=f"{num(taken)} ЗП", inline=True)
+    if entries:
+        e.description = "**Последние операции**\n" + "\n".join(history_line(en) for en in entries[:15])
+    else:
+        e.description = "Начислений пока нет. История ведётся с момента добавления журнала."
+    if since:
+        e.set_footer(text="Период считается с последнего закрытия месяца")
+    return e
+
+
 class StaffToolsCog(commands.Cog):
     def __init__(self, bot): self.bot = bot
 
@@ -178,6 +225,7 @@ class StaffToolsCog(commands.Cog):
         return results
 
     @tasks.loop(minutes=10)
+    @guard("salary_report_loop")
     async def salary_report_loop(self):
         now = datetime.now(timezone(timedelta(hours=DAY_UTC_OFFSET_HOURS)))
         if (now.day, now.hour) < (SALARY_REPORT_DAY, SALARY_REPORT_HOUR):
@@ -194,6 +242,14 @@ class StaffToolsCog(commands.Cog):
 
     @salary_report_loop.before_loop
     async def _before_salary_report(self): await self.bot.wait_until_ready()
+
+    @app_commands.command(name="myzp", description="Ваша ЗП: баланс и история начислений")
+    @app_commands.guild_only()
+    @app_commands.default_permissions(**PERMS_STAFF)
+    async def myzp_cmd(self, inter: discord.Interaction):
+        if not is_staff(inter.user):
+            return await inter.response.send_message("❌ Команда доступна только персоналу.", ephemeral=True)
+        await inter.response.send_message(embed=build_myzp(inter.user), ephemeral=True)
 
     @app_commands.command(name="salary_report", description="Отчёт о заработанной ЗП по веткам (куратор)")
     @app_commands.guild_only()

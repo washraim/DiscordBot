@@ -5,6 +5,7 @@ from storage import (
     get_settings, set_setting, get_staff, staff_levels, add_staff_level, remove_staff_level, all_users, get_shop
 )
 from helpers import is_owner, member_levels
+from error_reporting import report_error
 from config import OWNER_ID, PERMS_OWNER, PERMS_CURATOR, PERMS_RESPONSIBLE, PERMS_STAFF
 
 RED = 0x9B111E
@@ -21,6 +22,7 @@ CHANNELS = [
     ("voice_log",    "Канал войса",     "Войс",      "🎙️"),
     ("payout_builder_channel", "Канал выплат строителей", "Выплаты: строители", "🏗️"),
     ("payout_tester_channel",  "Канал выплат тестеров",   "Выплаты: тестеры",  "🧪"),
+    ("error_log",   "Канал ошибок",    "Ошибки",    "🚨"),
 ]
 ROLES = [
     ("builder_role", "Роль строителей", "Строители", "🏗️"),
@@ -373,6 +375,14 @@ class AdminView(OwnerView):
             note = (await ensure_role_rights(role, key)).strip()
             lines.append(f"{role.mention}: " + (note or "нужные права уже есть"))
         await i.followup.send("\n".join(lines), ephemeral=True)
+
+    @discord.ui.button(label="Тест ошибок", emoji="🚨", style=discord.ButtonStyle.secondary, row=4)
+    async def test_errors(self, i: discord.Interaction, b):
+        sent = await report_error(i.client, "Тестовая ошибка", RuntimeError("Проверка канала ошибок"),
+                                  {"Источник": "Кнопка в /admin"}, force=True)
+        await i.response.send_message(
+            "✅ Тестовая ошибка отправлена в канал ошибок." if sent
+            else "❌ Канал ошибок не задан или бот не может в него писать.", ephemeral=True)
 
     @discord.ui.button(label="Обновить", emoji="🔄", style=discord.ButtonStyle.secondary, row=4)
     async def reload(self, i: discord.Interaction, b):

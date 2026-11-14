@@ -32,15 +32,19 @@ def is_staff(m):
     return any(r.id in ids for r in getattr(m, "roles", []))
 
 
-async def send_log(client, key, embed):
+async def send_log_msg(client, key, embed, view=None, file=None):
     ch_id = get_settings().get(key)
     if not ch_id:
-        return False
+        return None
     ch = client.get_channel(ch_id)
     if ch is None:
-        return False
+        return None
     try:
-        await ch.send(embed=embed, allowed_mentions=discord.AllowedMentions.none())
+        return await ch.send(embed=embed, view=view, file=file,
+                             allowed_mentions=discord.AllowedMentions.none())
     except discord.HTTPException:
-        return False
-    return True
+        return None
+
+
+async def send_log(client, key, embed):
+    return (await send_log_msg(client, key, embed)) is not None
