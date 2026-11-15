@@ -8,7 +8,7 @@ from storage import (
     get_user, set_user, get_shop, save_shop, get_settings,
     create_order, get_order, update_order, delete_order, orders_of, all_orders,
 )
-from helpers import is_curator, is_staff
+from helpers import is_curator, is_staff, send_log
 
 RED = 0x9B111E
 GREEN = 0x2ECC71
@@ -26,6 +26,7 @@ CURRENCY = {
 DEFAULT_CURRENCY = {"players": "points", "staff": "salary"}
 STAFF_CAN_USE_PLAYER_SHOP = True
 MAX_ITEMS_PER_SHOP = 25
+MAX_QTY_PER_PURCHASE = 100
 
 CUR_ALIASES = {
     "баллы": "points", "балл": "points", "баллов": "points", "points": "points",
@@ -88,21 +89,54 @@ def cooldown_until(user_id, item_id, item) -> float:
     return until if until > time.time() else 0
 
 
-def validate_purchase(member, item_id, item):
+def order_qty(o):
+    return o.get("qty", 1)
+
+
+def order_total(o):
+    return o["price"] * order_qty(o)
+
+
+def name_with_qty(name, qty):
+    return f"{name} × {qty}" if qty > 1 else name
+
+
+def max_quantity(member, item):
+    if item.get("cooldown_days") or item["price"] <= 0:
+        return 1 if item.get("cooldown_days") else 0
+    have = get_user(member.id)[item_currency(item)]
+    limit = min(have // item["price"], MAX_QTY_PER_PURCHASE)
+    stock = item.get("stock")
+    if stock is not None:
+        limit = min(limit, stock)
+    return max(limit, 0)
+
+
+def validate_purchase(member, item_id, item, qty=1):
     if item["price"] <= 0:
         return "❌ У товара некорректная цена."
     if item_shop(item) not in allowed_shops(member):
         return "❌ Этот магазин вам недоступен."
+    if qty < 1:
+        return "❌ Количество должно быть больше 0."
+    if qty > MAX_QTY_PER_PURCHASE:
+        return f"❌ За один раз можно купить не больше {MAX_QTY_PER_PURCHASE} шт."
     stock = item.get("stock")
     if stock is not None and stock <= 0:
         return "❌ Товар закончился."
+    if stock is not None and stock < qty:
+        return f"❌ В наличии только {stock} шт."
+    if qty > 1 and item.get("cooldown_days"):
+        return "❌ Этот товар можно купить только в одном экземпляре."
     until = cooldown_until(member.id, item_id, item)
     if until:
         return f"❌ Этот товар можно покупать раз в {item['cooldown_days']} дн. Снова будет доступен {ts(until)}."
     cur = item_currency(item)
     have = get_user(member.id)[cur]
-    if have < item["price"]:
-        return f"❌ Недостаточно {CURRENCY[cur]['name']}: у вас {num(have)}, нужно {num(item['price'])}."
+    total = item["price"] * qty
+    if have < total:
+        suffix = f" за {qty} шт" if qty > 1 else ""
+        return f"❌ Недостаточно {CURRENCY[cur]['name']}: у вас {num(have)}, нужно {num(total)}{suffix}."
     return None
 
 
@@ -176,8 +210,8 @@ class ShopSelect(discord.ui.Select):
         err = validate_purchase(i.user, item_id, item)
         if err:
             return await i.response.send_message(err, ephemeral=True)
-        if item.get("prompt"):
-            await i.response.send_modal(PurchaseModal(item_id, item["prompt"], self.view))
+        if item.get("prompt") or max_quantity(i.user, item) > 1:
+            await i.response.send_modal(PurchaseModal(item_id, item, i.user, self.view))
         else:
             await process_purchase(i, item_id, "Не требуется", self.view)
 
@@ -225,8 +259,11 @@ def build_order_embed(o) -> discord.Embed:
     cur = CURRENCY[o["currency"]]
     e = discord.Embed(title=f"🛒 Заказ #{o['id']}", color=color, timestamp=discord.utils.utcnow())
     e.add_field(name="Кто", value=f"<@{o['user_id']}>\n`{o['user_id']}`", inline=True)
-    e.add_field(name="Что", value=o["name"], inline=True)
-    e.add_field(name="Цена", value=f"{cur['emoji']} {num(o['price'])}", inline=True)
+    e.add_field(name="Что", value=name_with_qty(o["name"], order_qty(o)), inline=True)
+    price_text_ = f"{cur['emoji']} {num(order_total(o))}"
+    if order_qty(o) > 1:
+        price_text_ += f" ({num(o['price'])} × {order_qty(o)})"
+    e.add_field(name="Цена", value=price_text_, inline=True)
     e.add_field(name="Магазин", value=SHOPS[o["shop"]]["name"], inline=True)
     e.add_field(name="Статус", value=label, inline=True)
     if o.get("handled_by"):
@@ -235,7 +272,7 @@ def build_order_embed(o) -> discord.Embed:
     if o.get("reason"):
         e.add_field(name="Причина отказа", value=o["reason"][:500], inline=False)
     if o["status"] == "rejected":
-        e.add_field(name="Возврат", value=f"{cur['emoji']} {num(o['price'])} возвращено покупателю", inline=False)
+        e.add_field(name="Возврат", value=f"{cur['emoji']} {num(order_total(o))} возвращено покупателю", inline=False)
     e.set_footer(text=f"Заказ создан {time.strftime('%d.%m.%Y %H:%M', time.localtime(o['created']))}")
     return e
 
@@ -314,8 +351,8 @@ async def apply_status(inter: discord.Interaction, oid: int, act: str, reason=No
     new_status = {"accept": "accepted", "done": "done", "reject": "rejected"}[act]
     if act == "reject":
         u = get_user(o["user_id"])
-        set_user(o["user_id"], **{o["currency"]: u[o["currency"]] + o["price"]})
-        _change_stock(o["item_id"], +1)
+        set_user(o["user_id"], **{o["currency"]: u[o["currency"]] + order_total(o)})
+        _change_stock(o["item_id"], +order_qty(o))
 
     o = update_order(oid, status=new_status, handled_by=inter.user.id, handled_at=time.time(), reason=reason)
 
@@ -348,9 +385,9 @@ async def notify_buyer(client, o):
     title, color = titles[o["status"]]
     cur = CURRENCY[o["currency"]]
     e = discord.Embed(title=f"{title} (#{o['id']})", color=color, timestamp=discord.utils.utcnow())
-    e.add_field(name="Товар", value=o["name"], inline=True)
+    e.add_field(name="Товар", value=name_with_qty(o["name"], order_qty(o)), inline=True)
     if o["status"] == "rejected":
-        e.add_field(name="Возврат", value=f"{cur['emoji']} {num(o['price'])} {cur['name']}", inline=True)
+        e.add_field(name="Возврат", value=f"{cur['emoji']} {num(order_total(o))} {cur['name']}", inline=True)
         if o.get("reason"):
             e.add_field(name="Причина", value=o["reason"][:500], inline=False)
     try:
@@ -367,11 +404,11 @@ async def _reply(inter: discord.Interaction, msg: str):
         await inter.response.send_message(msg, ephemeral=True)
 
 
-async def process_purchase(inter: discord.Interaction, item_id: str, details: str, panel=None):
+async def process_purchase(inter: discord.Interaction, item_id: str, details: str, panel=None, qty: int = 1):
     item = get_shop().get(item_id)
     if not item:
         return await _reply(inter, "❌ Этот товар больше недоступен.")
-    err = validate_purchase(inter.user, item_id, item)
+    err = validate_purchase(inter.user, item_id, item, qty)
     if err:
         return await _reply(inter, err)
 
@@ -380,44 +417,63 @@ async def process_purchase(inter: discord.Interaction, item_id: str, details: st
     if ch is None:
         return await _reply(inter, "❌ Магазин временно недоступен: не настроен канал покупок. Сообщите куратору.")
 
-    cur, price = item_currency(item), item["price"]
+    cur, unit = item_currency(item), item["price"]
+    total = unit * qty
     u = get_user(inter.user.id)
-    set_user(inter.user.id, **{cur: u[cur] - price})
-    _change_stock(item_id, -1)
-    oid = create_order(user_id=inter.user.id, item_id=item_id, name=item["name"], price=price,
+    set_user(inter.user.id, **{cur: u[cur] - total})
+    _change_stock(item_id, -qty)
+    oid = create_order(user_id=inter.user.id, item_id=item_id, name=item["name"], price=unit, qty=qty,
                        currency=cur, shop=item_shop(item), details=details)
     try:
         msg = await ch.send(embed=build_order_embed(get_order(oid)), view=order_view(oid, "new"))
     except discord.HTTPException:
         u = get_user(inter.user.id)
-        set_user(inter.user.id, **{cur: u[cur] + price})
-        _change_stock(item_id, +1)
+        set_user(inter.user.id, **{cur: u[cur] + total})
+        _change_stock(item_id, +qty)
         delete_order(oid)
         return await _reply(inter, "❌ Не удалось оформить заказ (бот не может писать в канал покупок). Средства не списаны.")
     update_order(oid, channel_id=ch.id, message_id=msg.id)
 
-    await _reply(inter, f"✅ Куплено: **{item['name']}**\n🧾 Заказ **#{oid}**\n📝 {details}\n"
+    price_line = f"{CURRENCY[cur]['emoji']} {num(total)}"
+    if qty > 1:
+        price_line += f" ({num(unit)} × {qty})"
+    await _reply(inter, f"✅ Куплено: **{name_with_qty(item['name'], qty)}** за {price_line}\n"
+                        f"🧾 Заказ **#{oid}**\n📝 {details}\n"
                         "О статусе заказа придёт уведомление в личные сообщения, список заказов: `/orders`.")
     if panel:
         await panel.refresh()
 
 
 class PurchaseModal(discord.ui.Modal):
-    def __init__(self, item_id, prompt, panel):
+    def __init__(self, item_id, item, member, panel):
         super().__init__(title="Оформление заказа")
         self.item_id, self.panel = item_id, panel
-        self.det = discord.ui.TextInput(label=prompt[:45], style=discord.TextStyle.paragraph,
-                                        required=True, max_length=300)
-        self.add_item(self.det)
+        self.qty = None
+        self.det = None
+        limit = max_quantity(member, item)
+        if limit > 1:
+            self.qty = discord.ui.TextInput(label=f"Количество (макс. {limit})"[:45], default="1", max_length=4)
+            self.add_item(self.qty)
+        if item.get("prompt"):
+            self.det = discord.ui.TextInput(label=item["prompt"][:45], style=discord.TextStyle.paragraph,
+                                            required=True, max_length=300)
+            self.add_item(self.det)
 
     async def on_submit(self, inter: discord.Interaction):
-        await process_purchase(inter, self.item_id, self.det.value, self.panel)
+        qty = 1
+        if self.qty is not None:
+            try:
+                qty = int(self.qty.value.strip())
+            except ValueError:
+                return await inter.response.send_message("❌ Количество должно быть целым числом.", ephemeral=True)
+        details = self.det.value if self.det is not None else "Не требуется"
+        await process_purchase(inter, self.item_id, details, self.panel, qty)
 
 
 def build_admin_embed() -> discord.Embed:
     e = discord.Embed(
         title="🛠️ Управление магазинами",
-        description="Добавляйте, удаляйте товары и настраивайте лимиты.\n▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬",
+        description="Добавляйте, изменяйте, удаляйте товары и настраивайте лимиты.\n▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬",
         color=RED, timestamp=discord.utils.utcnow())
     for key, meta in SHOPS.items():
         items = items_of(key)
@@ -569,6 +625,88 @@ class LimitsView(CuratorView):
         self.add_item(LimitsSelect(shop_key, panel))
 
 
+class EditModal(discord.ui.Modal):
+    def __init__(self, item_id, item, panel):
+        super().__init__(title=f"Изменить: {item['name']}"[:45])
+        self.item_id, self.panel = item_id, panel
+        cur_name = "баллы" if item_currency(item) == "points" else "зп"
+        self.s_name = discord.ui.TextInput(label="Название", max_length=100, default=item["name"][:100])
+        self.s_price = discord.ui.TextInput(label="Цена", max_length=10, default=str(item["price"]))
+        self.s_cur = discord.ui.TextInput(label="Валюта: баллы или зп", required=False, max_length=10, default=cur_name)
+        self.s_prompt = discord.ui.TextInput(label="Вопрос при покупке (пусто = убрать)", required=False,
+                                             max_length=100, default=item.get("prompt") or None)
+        for f in (self.s_name, self.s_price, self.s_cur, self.s_prompt):
+            self.add_item(f)
+
+    async def on_submit(self, inter: discord.Interaction):
+        if not is_curator(inter.user):
+            return await inter.response.send_message("❌ Нет прав.", ephemeral=True)
+        try:
+            price = int(self.s_price.value.replace(" ", ""))
+        except ValueError:
+            return await inter.response.send_message("❌ Цена — число.", ephemeral=True)
+        if price <= 0:
+            return await inter.response.send_message("❌ Цена должна быть больше 0.", ephemeral=True)
+        name = self.s_name.value.strip()
+        if not name:
+            return await inter.response.send_message("❌ Название не может быть пустым.", ephemeral=True)
+        raw = self.s_cur.value.strip().lower()
+        if raw and raw not in CUR_ALIASES:
+            return await inter.response.send_message("❌ Валюта: «баллы» или «зп».", ephemeral=True)
+
+        shop = get_shop()
+        it = shop.get(self.item_id)
+        if it is None:
+            return await inter.response.send_message("❌ Товар уже удалён.", ephemeral=True)
+
+        old = dict(it)
+        it["name"] = name
+        it["price"] = price
+        if raw:
+            it["currency"] = CUR_ALIASES[raw]
+        it["prompt"] = self.s_prompt.value.strip() or None
+        save_shop(shop)
+
+        changes = []
+        if old["name"] != it["name"]:
+            changes.append(f"Название: {old['name']} → {it['name']}")
+        if old["price"] != it["price"] or item_currency(old) != item_currency(it):
+            changes.append(f"Цена: {price_text(old)} → {price_text(it)}")
+        if (old.get("prompt") or None) != it["prompt"]:
+            changes.append("Вопрос при покупке: " + ("изменён" if it["prompt"] else "убран"))
+        text = "\n".join(f"• {c}" for c in changes) or "Изменений нет."
+        await inter.response.send_message(
+            f"✅ Товар обновлён:\n{text}\nУже оформленные заказы остаются с прежней ценой.", ephemeral=True)
+
+        if changes:
+            e = discord.Embed(title="✏️ Товар изменён", color=RED, timestamp=discord.utils.utcnow())
+            e.add_field(name="Куратор", value=inter.user.mention, inline=True)
+            e.add_field(name="Магазин", value=SHOPS[item_shop(it)]["name"], inline=True)
+            e.add_field(name="Изменения", value=text[:1000], inline=False)
+            await send_log(inter.client, "pay_log", e)
+        await self.panel.refresh()
+
+
+class EditSelect(discord.ui.Select):
+    def __init__(self, shop_key, panel):
+        self.panel = panel
+        opts = [discord.SelectOption(label=it["name"][:80], value=iid, description=price_text(it)[:100])
+                for iid, it in list(items_of(shop_key).items())[:MAX_ITEMS_PER_SHOP]]
+        super().__init__(placeholder="Какой товар изменить?", options=opts)
+
+    async def callback(self, i: discord.Interaction):
+        item = get_shop().get(self.values[0])
+        if not item:
+            return await i.response.edit_message(content="❌ Товар уже удалён.", view=None)
+        await i.response.send_modal(EditModal(self.values[0], item, self.panel))
+
+
+class EditView(CuratorView):
+    def __init__(self, shop_key, panel):
+        super().__init__(timeout=60)
+        self.add_item(EditSelect(shop_key, panel))
+
+
 class ShopAdminView(CuratorView):
     def __init__(self, inter: discord.Interaction):
         super().__init__(timeout=300)
@@ -599,6 +737,11 @@ class ShopAdminView(CuratorView):
             return await i.response.send_message("В этом магазине пусто.", ephemeral=True)
         await i.response.send_message("Выберите товар:", view=ShopRemoveView(key, self), ephemeral=True)
 
+    async def _edit(self, i: discord.Interaction, key):
+        if not items_of(key):
+            return await i.response.send_message("В этом магазине пусто.", ephemeral=True)
+        await i.response.send_message("Выберите товар:", view=EditView(key, self), ephemeral=True)
+
     async def _limits(self, i: discord.Interaction, key):
         if not items_of(key):
             return await i.response.send_message("В этом магазине пусто.", ephemeral=True)
@@ -622,7 +765,13 @@ class ShopAdminView(CuratorView):
     @discord.ui.button(label="Лимиты: персонал", emoji="⚙️", style=discord.ButtonStyle.primary, row=2)
     async def lim_staff(self, i, b): await self._limits(i, "staff")
 
-    @discord.ui.button(label="Обновить", emoji="🔄", style=discord.ButtonStyle.secondary, row=3)
+    @discord.ui.button(label="Изменить: игроки", emoji="✏️", style=discord.ButtonStyle.primary, row=3)
+    async def edit_players(self, i, b): await self._edit(i, "players")
+
+    @discord.ui.button(label="Изменить: персонал", emoji="✏️", style=discord.ButtonStyle.primary, row=3)
+    async def edit_staff(self, i, b): await self._edit(i, "staff")
+
+    @discord.ui.button(label="Обновить", emoji="🔄", style=discord.ButtonStyle.secondary, row=4)
     async def reload(self, i: discord.Interaction, b):
         await i.response.edit_message(embed=build_admin_embed(), view=self)
 
@@ -657,7 +806,7 @@ class ShopCog(commands.Cog):
             link = ""
             if o.get("channel_id") and o.get("message_id"):
                 link = f" · [открыть](https://discord.com/channels/{channel.guild.id}/{o['channel_id']}/{o['message_id']})"
-            lines.append(f"**#{o['id']}** {o['name']} · <@{o['user_id']}> · ждёт {hours} ч.{link}")
+            lines.append(f"**#{o['id']}** {name_with_qty(o['name'], order_qty(o))} · <@{o['user_id']}> · ждёт {hours} ч.{link}")
         if len(stale) > 15:
             lines.append(f"… и ещё {len(stale) - 15}")
         e = discord.Embed(title="⏰ Необработанные заказы", description="\n".join(lines), color=ORANGE,
@@ -690,7 +839,7 @@ class ShopCog(commands.Cog):
             e.description = "Заказов пока нет."
         else:
             e.description = "\n".join(
-                f"**#{o['id']}** {o['name']} — {STATUS[o['status']][0]} · {ts(o['created'], 'd')}"
+                f"**#{o['id']}** {name_with_qty(o['name'], order_qty(o))} — {STATUS[o['status']][0]} · {ts(o['created'], 'd')}"
                 + (f"\n└ причина: {o['reason'][:100]}" if o.get("reason") else "")
                 for o in orders)
             e.set_footer(text="Показаны последние 10 заказов")
