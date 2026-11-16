@@ -25,7 +25,7 @@ CURRENCY = {
 }
 DEFAULT_CURRENCY = {"players": "points", "staff": "salary"}
 STAFF_CAN_USE_PLAYER_SHOP = True
-MAX_ITEMS_PER_SHOP = 25
+MAX_ITEMS_PER_CATEGORY = 25
 MAX_QTY_PER_PURCHASE = 100
 
 CUR_ALIASES = {
@@ -65,6 +65,47 @@ def limits_text(item) -> str:
     if item.get("cooldown_days"):
         parts.append(f"раз в {item['cooldown_days']} дн.")
     return " · ".join(parts)
+
+
+CATEGORIES = {
+    "cases": ("🎁", "Кейсы"),
+    "privileges": ("👑", "Привилегии"),
+    "pokemons": ("🐾", "Покемоны"),
+    "items": ("🎒", "Предметы"),
+    "staff": ("🛠️", "Staff"),
+}
+PLAYER_CATEGORIES = ("cases", "privileges", "pokemons", "items")
+CATEGORY_ALIASES = {
+    "кейсы": "cases", "кейс": "cases", "cases": "cases", "case": "cases",
+    "привилегии": "privileges", "привилегия": "privileges", "privileges": "privileges",
+    "покемоны": "pokemons", "покемон": "pokemons", "pokemons": "pokemons", "pokemon": "pokemons",
+    "предметы": "items", "предмет": "items", "items": "items", "item": "items",
+    "staff": "staff", "стафф": "staff", "персонал": "staff",
+}
+
+
+def parse_category(raw):
+    return CATEGORY_ALIASES.get(raw.strip().casefold())
+
+
+def item_category(item):
+    if item_shop(item) == "staff":
+        return "staff"
+    return item.get("category") or "items"
+
+
+def category_shop(category):
+    return "staff" if category == "staff" else "players"
+
+
+def items_of_category(category):
+    return {iid: it for iid, it in get_shop().items() if item_category(it) == category}
+
+
+def allowed_categories(member):
+    if is_staff(member):
+        return list(PLAYER_CATEGORIES) + ["staff"] if STAFF_CAN_USE_PLAYER_SHOP else ["staff"]
+    return list(PLAYER_CATEGORIES)
 
 
 def items_of(shop_key):
@@ -148,48 +189,41 @@ def _change_stock(item_id, delta):
         save_shop(shop)
 
 
-def build_shop_embed(member, shop_key) -> discord.Embed:
-    meta = SHOPS[shop_key]
-    items = items_of(shop_key)
-    e = discord.Embed(title=f"{meta['emoji']} {meta['name']}", color=RED, timestamp=discord.utils.utcnow())
-    e.set_author(name="Ashra Team • Discord Server")
-
-    head = "Выберите товар в меню ниже.\n▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬\n"
-    if items:
-        lines = []
-        for n, it in enumerate(items.values(), start=1):
-            line = f"**{n}.** {it['name']} — **{price_text(it)}**"
-            if limits_text(it):
-                line += f" · {limits_text(it)}"
-            if it.get("prompt"):
-                line += " 📝"
-            lines.append(line)
-        e.description = head + "\n".join(lines) + "\n\n📝 — при покупке нужно уточнить детали"
-    else:
-        e.description = head + "Здесь пока пусто."
-
+def build_shop_text(member, category) -> str:
+    emoji, label = CATEGORIES[category]
+    items = items_of_category(category)
+    lines = []
+    for n, it in enumerate(items.values(), start=1):
+        line = f"**{n}.** {it['name']} — **{price_text(it)}**"
+        if limits_text(it):
+            line += f" · {limits_text(it)}"
+        if it.get("prompt"):
+            line += " 📝"
+        lines.append(line)
+    body = "\n".join(lines) if lines else "Здесь пока пусто."
     u = get_user(member.id)
-    e.set_footer(text=f"Ваш баланс: 🪙 {num(u['points'])} · 💵 {num(u['salary'])}")
-    return e
+    text = f"### 🛒 Магазин — {emoji} {label}\n\n{body}\n\n"
+    if any(it.get("prompt") for it in items.values()):
+        text += "-# 📝 — при покупке нужно уточнить детали\n"
+    text += f"-# Ваш баланс: 🪙 {num(u['points'])} · 💵 {num(u['salary'])}"
+    return text[:3900]
 
 
-class ShopTabButton(discord.ui.Button):
-    def __init__(self, key, current):
-        meta = SHOPS[key]
-        super().__init__(label=meta["name"], emoji=meta["emoji"], row=0,
-                         style=discord.ButtonStyle.primary if key == current else discord.ButtonStyle.secondary,
-                         disabled=(key == current))
-        self.key = key
+class ShopCategorySelect(discord.ui.Select):
+    def __init__(self, member, owner):
+        options = [discord.SelectOption(label=CATEGORIES[k][1], value=k, emoji=CATEGORIES[k][0])
+                   for k in allowed_categories(member)]
+        super().__init__(placeholder="Выберите категорию", options=options)
+        self.owner = owner
 
     async def callback(self, i: discord.Interaction):
-        v: ShopView = self.view
-        v.shop_key = self.key
-        v.rebuild()
-        await i.response.edit_message(embed=build_shop_embed(i.user, self.key), view=v)
+        self.owner.category = self.values[0]
+        self.owner.build()
+        await i.response.edit_message(view=self.owner)
 
 
-class ShopSelect(discord.ui.Select):
-    def __init__(self, items):
+class ShopItemSelect(discord.ui.Select):
+    def __init__(self, items, owner):
         opts = []
         for iid, it in items.items():
             if it.get("stock") is not None and it["stock"] <= 0:
@@ -200,37 +234,51 @@ class ShopSelect(discord.ui.Select):
                 desc += f" · {limits_text(it)}"
             opts.append(discord.SelectOption(label=it["name"][:80], value=iid, description=desc[:100],
                                              emoji=cur["emoji"]))
-        super().__init__(placeholder="Выберите товар для покупки…", options=opts[:MAX_ITEMS_PER_SHOP], row=1)
+        super().__init__(placeholder="Выберите товар для покупки…", options=opts[:MAX_ITEMS_PER_CATEGORY])
+        self.owner = owner
 
     async def callback(self, i: discord.Interaction):
         item_id = self.values[0]
         item = get_shop().get(item_id)
         if not item:
             return await i.response.send_message("❌ Этот товар больше недоступен.", ephemeral=True)
+        if item_category(item) not in allowed_categories(i.user):
+            return await i.response.send_message("❌ Эта категория вам недоступна.", ephemeral=True)
         err = validate_purchase(i.user, item_id, item)
         if err:
             return await i.response.send_message(err, ephemeral=True)
         if item.get("prompt") or max_quantity(i.user, item) > 1:
-            await i.response.send_modal(PurchaseModal(item_id, item, i.user, self.view))
+            await i.response.send_modal(PurchaseModal(item_id, item, i.user, self.owner))
         else:
-            await process_purchase(i, item_id, "Не требуется", self.view)
+            await process_purchase(i, item_id, "Не требуется", self.owner)
 
 
-class ShopView(discord.ui.View):
-    def __init__(self, inter: discord.Interaction, shop_key: str):
+class ShopView(discord.ui.LayoutView):
+    def __init__(self, inter: discord.Interaction, category: str):
         super().__init__(timeout=180)
-        self.inter, self.shop_key = inter, shop_key
-        self.rebuild()
+        self.inter, self.category = inter, category
+        self.selects = []
+        self.build()
 
-    def rebuild(self):
+    def build(self):
         self.clear_items()
-        allowed = allowed_shops(self.inter.user)
-        if len(allowed) > 1:
-            for key in allowed:
-                self.add_item(ShopTabButton(key, self.shop_key))
-        sel = ShopSelect(items_of(self.shop_key))
-        if sel.options:
-            self.add_item(sel)
+        self.selects = []
+        container = discord.ui.Container()
+        container.add_item(discord.ui.TextDisplay(build_shop_text(self.inter.user, self.category)))
+
+        category_select = ShopCategorySelect(self.inter.user, self)
+        row = discord.ui.ActionRow()
+        row.add_item(category_select)
+        container.add_item(row)
+        self.selects.append(category_select)
+
+        item_select = ShopItemSelect(items_of_category(self.category), self)
+        if item_select.options:
+            row2 = discord.ui.ActionRow()
+            row2.add_item(item_select)
+            container.add_item(row2)
+            self.selects.append(item_select)
+        self.add_item(container)
 
     async def interaction_check(self, i: discord.Interaction) -> bool:
         if i.user.id != self.inter.user.id:
@@ -239,15 +287,15 @@ class ShopView(discord.ui.View):
         return True
 
     async def refresh(self):
-        self.rebuild()
+        self.build()
         try:
-            await self.inter.edit_original_response(embed=build_shop_embed(self.inter.user, self.shop_key), view=self)
+            await self.inter.edit_original_response(view=self)
         except discord.HTTPException:
             pass
 
     async def on_timeout(self):
-        for item in self.children:
-            item.disabled = True
+        for sel in self.selects:
+            sel.disabled = True
         try:
             await self.inter.edit_original_response(view=self)
         except discord.HTTPException:
@@ -472,18 +520,18 @@ class PurchaseModal(discord.ui.Modal):
 
 def build_admin_embed() -> discord.Embed:
     e = discord.Embed(
-        title="🛠️ Управление магазинами",
+        title="🛠️ Управление магазином",
         description="Добавляйте, изменяйте, удаляйте товары и настраивайте лимиты.\n▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬",
         color=RED, timestamp=discord.utils.utcnow())
-    for key, meta in SHOPS.items():
-        items = items_of(key)
+    for key, (emoji, label) in CATEGORIES.items():
+        items = items_of_category(key)
         lines = []
         for it in items.values():
             line = f"• {it['name']} — {price_text(it)}"
             if limits_text(it):
                 line += f" ({limits_text(it)})"
             lines.append(line)
-        e.add_field(name=f"{meta['emoji']} {meta['name']} ({len(items)}/{MAX_ITEMS_PER_SHOP})",
+        e.add_field(name=f"{emoji} {label} ({len(items)}/{MAX_ITEMS_PER_CATEGORY})",
                     value=("\n".join(lines) or "`пусто`")[:1024], inline=True)
     return e
 
@@ -496,13 +544,54 @@ class CuratorView(discord.ui.View):
         return True
 
 
+class AdminCategorySelect(discord.ui.Select):
+    def __init__(self, handler):
+        options = [discord.SelectOption(label=label, value=key, emoji=emoji,
+                                        description=f"Товаров: {len(items_of_category(key))}")
+                   for key, (emoji, label) in CATEGORIES.items()]
+        super().__init__(placeholder="Выберите категорию", options=options)
+        self.handler = handler
+
+    async def callback(self, i: discord.Interaction):
+        await self.handler(i, self.values[0])
+
+
+class AdminCategoryView(CuratorView):
+    def __init__(self, handler):
+        super().__init__(timeout=60)
+        self.add_item(AdminCategorySelect(handler))
+
+
+class AdminItemSelect(discord.ui.Select):
+    def __init__(self, category, handler, placeholder):
+        opts = []
+        for iid, it in list(items_of_category(category).items())[:MAX_ITEMS_PER_CATEGORY]:
+            desc = price_text(it)
+            if limits_text(it):
+                desc += f" · {limits_text(it)}"
+            opts.append(discord.SelectOption(label=it["name"][:80], value=iid, description=desc[:100]))
+        super().__init__(placeholder=placeholder, options=opts)
+        self.handler = handler
+
+    async def callback(self, i: discord.Interaction):
+        await self.handler(i, self.values[0])
+
+
+class AdminItemView(CuratorView):
+    def __init__(self, category, handler, placeholder):
+        super().__init__(timeout=60)
+        self.add_item(AdminItemSelect(category, handler, placeholder))
+
+
 class ShopAddModal(discord.ui.Modal):
-    def __init__(self, shop_key, panel):
-        super().__init__(title=f"Добавить: {SHOPS[shop_key]['name']}"[:45])
-        self.shop_key, self.panel = shop_key, panel
+    def __init__(self, category, panel):
+        emoji, label = CATEGORIES[category]
+        super().__init__(title=f"Добавить: {label}"[:45])
+        self.category, self.panel = category, panel
+        self.shop_key = category_shop(category)
         self.s_name = discord.ui.TextInput(label="Название", max_length=100)
         self.s_price = discord.ui.TextInput(label="Цена", max_length=10)
-        default = "баллы" if DEFAULT_CURRENCY[shop_key] == "points" else "зп"
+        default = "баллы" if DEFAULT_CURRENCY[self.shop_key] == "points" else "зп"
         self.s_cur = discord.ui.TextInput(label="Валюта: баллы или зп", required=False, max_length=10,
                                           placeholder=f"Пусто = {default}")
         self.s_prompt = discord.ui.TextInput(label="Вопрос при покупке (необязательно)", required=False,
@@ -525,42 +614,22 @@ class ShopAddModal(discord.ui.Modal):
             return await inter.response.send_message("❌ Валюта: «баллы» или «зп».", ephemeral=True)
         currency = CUR_ALIASES[raw] if raw else DEFAULT_CURRENCY[self.shop_key]
 
-        if len(items_of(self.shop_key)) >= MAX_ITEMS_PER_SHOP:
+        if len(items_of_category(self.category)) >= MAX_ITEMS_PER_CATEGORY:
             return await inter.response.send_message(
-                f"❌ В магазине уже {MAX_ITEMS_PER_SHOP} товаров, это максимум.", ephemeral=True)
+                f"❌ В категории уже {MAX_ITEMS_PER_CATEGORY} товаров, это максимум.", ephemeral=True)
 
         shop = get_shop()
         shop[str(time.time_ns())] = {
             "name": self.s_name.value, "price": price, "prompt": self.s_prompt.value or None,
-            "shop": self.shop_key, "currency": currency, "stock": None, "cooldown_days": None,
+            "shop": self.shop_key, "category": self.category, "currency": currency,
+            "stock": None, "cooldown_days": None,
         }
         save_shop(shop)
+        emoji, label = CATEGORIES[self.category]
         await inter.response.send_message(
-            f"✅ **{self.s_name.value}** добавлен в «{SHOPS[self.shop_key]['name']}» — "
+            f"✅ **{self.s_name.value}** добавлен в «{emoji} {label}» — "
             f"{CURRENCY[currency]['emoji']} {num(price)}. Лимиты задаются кнопкой «Лимиты».", ephemeral=True)
         await self.panel.refresh()
-
-
-class ShopRemoveSelect(discord.ui.Select):
-    def __init__(self, shop_key, panel):
-        self.panel = panel
-        opts = [discord.SelectOption(label=it["name"][:80], value=iid, description=price_text(it)[:100])
-                for iid, it in list(items_of(shop_key).items())[:MAX_ITEMS_PER_SHOP]]
-        super().__init__(placeholder="Что удалить?", options=opts)
-
-    async def callback(self, i: discord.Interaction):
-        shop = get_shop()
-        item = shop.pop(self.values[0], None)
-        save_shop(shop)
-        name = item["name"] if item else "Товар"
-        await i.response.edit_message(content=f"✅ **{name}** удалён.", view=None)
-        await self.panel.refresh()
-
-
-class ShopRemoveView(CuratorView):
-    def __init__(self, shop_key, panel):
-        super().__init__(timeout=60)
-        self.add_item(ShopRemoveSelect(shop_key, panel))
 
 
 class LimitsModal(discord.ui.Modal):
@@ -604,27 +673,6 @@ class LimitsModal(discord.ui.Modal):
         await self.panel.refresh()
 
 
-class LimitsSelect(discord.ui.Select):
-    def __init__(self, shop_key, panel):
-        self.panel = panel
-        opts = [discord.SelectOption(label=it["name"][:80], value=iid,
-                                     description=(limits_text(it) or "без ограничений")[:100])
-                for iid, it in list(items_of(shop_key).items())[:MAX_ITEMS_PER_SHOP]]
-        super().__init__(placeholder="Для какого товара настроить лимиты?", options=opts)
-
-    async def callback(self, i: discord.Interaction):
-        item = get_shop().get(self.values[0])
-        if not item:
-            return await i.response.edit_message(content="❌ Товар уже удалён.", view=None)
-        await i.response.send_modal(LimitsModal(self.values[0], item, self.panel))
-
-
-class LimitsView(CuratorView):
-    def __init__(self, shop_key, panel):
-        super().__init__(timeout=60)
-        self.add_item(LimitsSelect(shop_key, panel))
-
-
 class EditModal(discord.ui.Modal):
     def __init__(self, item_id, item, panel):
         super().__init__(title=f"Изменить: {item['name']}"[:45])
@@ -633,9 +681,12 @@ class EditModal(discord.ui.Modal):
         self.s_name = discord.ui.TextInput(label="Название", max_length=100, default=item["name"][:100])
         self.s_price = discord.ui.TextInput(label="Цена", max_length=10, default=str(item["price"]))
         self.s_cur = discord.ui.TextInput(label="Валюта: баллы или зп", required=False, max_length=10, default=cur_name)
+        self.s_cat = discord.ui.TextInput(label="Категория", required=False, max_length=20,
+                                          default=CATEGORIES[item_category(item)][1],
+                                          placeholder="кейсы, привилегии, покемоны, предметы, staff")
         self.s_prompt = discord.ui.TextInput(label="Вопрос при покупке (пусто = убрать)", required=False,
                                              max_length=100, default=item.get("prompt") or None)
-        for f in (self.s_name, self.s_price, self.s_cur, self.s_prompt):
+        for f in (self.s_name, self.s_price, self.s_cur, self.s_cat, self.s_prompt):
             self.add_item(f)
 
     async def on_submit(self, inter: discord.Interaction):
@@ -659,11 +710,23 @@ class EditModal(discord.ui.Modal):
         if it is None:
             return await inter.response.send_message("❌ Товар уже удалён.", ephemeral=True)
 
+        new_cat = item_category(it)
+        if self.s_cat.value.strip():
+            new_cat = parse_category(self.s_cat.value)
+            if new_cat is None:
+                return await inter.response.send_message(
+                    "❌ Категория: кейсы, привилегии, покемоны, предметы или staff.", ephemeral=True)
+        if new_cat != item_category(it) and len(items_of_category(new_cat)) >= MAX_ITEMS_PER_CATEGORY:
+            return await inter.response.send_message(
+                f"❌ В категории «{CATEGORIES[new_cat][1]}» уже {MAX_ITEMS_PER_CATEGORY} товаров.", ephemeral=True)
+
         old = dict(it)
         it["name"] = name
         it["price"] = price
         if raw:
             it["currency"] = CUR_ALIASES[raw]
+        it["category"] = new_cat
+        it["shop"] = category_shop(new_cat)
         it["prompt"] = self.s_prompt.value.strip() or None
         save_shop(shop)
 
@@ -672,6 +735,8 @@ class EditModal(discord.ui.Modal):
             changes.append(f"Название: {old['name']} → {it['name']}")
         if old["price"] != it["price"] or item_currency(old) != item_currency(it):
             changes.append(f"Цена: {price_text(old)} → {price_text(it)}")
+        if item_category(old) != new_cat:
+            changes.append(f"Категория: {CATEGORIES[item_category(old)][1]} → {CATEGORIES[new_cat][1]}")
         if (old.get("prompt") or None) != it["prompt"]:
             changes.append("Вопрос при покупке: " + ("изменён" if it["prompt"] else "убран"))
         text = "\n".join(f"• {c}" for c in changes) or "Изменений нет."
@@ -681,30 +746,10 @@ class EditModal(discord.ui.Modal):
         if changes:
             e = discord.Embed(title="✏️ Товар изменён", color=RED, timestamp=discord.utils.utcnow())
             e.add_field(name="Куратор", value=inter.user.mention, inline=True)
-            e.add_field(name="Магазин", value=SHOPS[item_shop(it)]["name"], inline=True)
+            e.add_field(name="Категория", value=CATEGORIES[new_cat][1], inline=True)
             e.add_field(name="Изменения", value=text[:1000], inline=False)
             await send_log(inter.client, "pay_log", e)
         await self.panel.refresh()
-
-
-class EditSelect(discord.ui.Select):
-    def __init__(self, shop_key, panel):
-        self.panel = panel
-        opts = [discord.SelectOption(label=it["name"][:80], value=iid, description=price_text(it)[:100])
-                for iid, it in list(items_of(shop_key).items())[:MAX_ITEMS_PER_SHOP]]
-        super().__init__(placeholder="Какой товар изменить?", options=opts)
-
-    async def callback(self, i: discord.Interaction):
-        item = get_shop().get(self.values[0])
-        if not item:
-            return await i.response.edit_message(content="❌ Товар уже удалён.", view=None)
-        await i.response.send_modal(EditModal(self.values[0], item, self.panel))
-
-
-class EditView(CuratorView):
-    def __init__(self, shop_key, panel):
-        super().__init__(timeout=60)
-        self.add_item(EditSelect(shop_key, panel))
 
 
 class ShopAdminView(CuratorView):
@@ -732,46 +777,60 @@ class ShopAdminView(CuratorView):
         except discord.HTTPException:
             pass
 
-    async def _remove(self, i: discord.Interaction, key):
-        if not items_of(key):
-            return await i.response.send_message("В этом магазине пусто.", ephemeral=True)
-        await i.response.send_message("Выберите товар:", view=ShopRemoveView(key, self), ephemeral=True)
+    async def _pick_item(self, i: discord.Interaction, category, handler, placeholder):
+        if not items_of_category(category):
+            return await i.response.edit_message(content="В этой категории пусто.", view=None)
+        await i.response.edit_message(content="Выберите товар:", view=AdminItemView(category, handler, placeholder))
 
-    async def _edit(self, i: discord.Interaction, key):
-        if not items_of(key):
-            return await i.response.send_message("В этом магазине пусто.", ephemeral=True)
-        await i.response.send_message("Выберите товар:", view=EditView(key, self), ephemeral=True)
+    async def _add_to(self, i: discord.Interaction, category):
+        await i.response.send_modal(ShopAddModal(category, self))
 
-    async def _limits(self, i: discord.Interaction, key):
-        if not items_of(key):
-            return await i.response.send_message("В этом магазине пусто.", ephemeral=True)
-        await i.response.send_message("Выберите товар:", view=LimitsView(key, self), ephemeral=True)
+    async def _edit_cat(self, i: discord.Interaction, category):
+        await self._pick_item(i, category, self._edit_item, "Какой товар изменить?")
 
-    @discord.ui.button(label="Добавить: игроки", emoji="➕", style=discord.ButtonStyle.success, row=0)
-    async def add_players(self, i, b): await i.response.send_modal(ShopAddModal("players", self))
+    async def _edit_item(self, i: discord.Interaction, item_id):
+        item = get_shop().get(item_id)
+        if not item:
+            return await i.response.edit_message(content="❌ Товар уже удалён.", view=None)
+        await i.response.send_modal(EditModal(item_id, item, self))
 
-    @discord.ui.button(label="Добавить: персонал", emoji="➕", style=discord.ButtonStyle.success, row=0)
-    async def add_staff(self, i, b): await i.response.send_modal(ShopAddModal("staff", self))
+    async def _remove_cat(self, i: discord.Interaction, category):
+        await self._pick_item(i, category, self._remove_item, "Что удалить?")
 
-    @discord.ui.button(label="Удалить: игроки", emoji="🗑", style=discord.ButtonStyle.danger, row=1)
-    async def rem_players(self, i, b): await self._remove(i, "players")
+    async def _remove_item(self, i: discord.Interaction, item_id):
+        shop = get_shop()
+        item = shop.pop(item_id, None)
+        save_shop(shop)
+        name = item["name"] if item else "Товар"
+        await i.response.edit_message(content=f"✅ **{name}** удалён.", view=None)
+        await self.refresh()
 
-    @discord.ui.button(label="Удалить: персонал", emoji="🗑", style=discord.ButtonStyle.danger, row=1)
-    async def rem_staff(self, i, b): await self._remove(i, "staff")
+    async def _limits_cat(self, i: discord.Interaction, category):
+        await self._pick_item(i, category, self._limits_item, "Для какого товара настроить лимиты?")
 
-    @discord.ui.button(label="Лимиты: игроки", emoji="⚙️", style=discord.ButtonStyle.primary, row=2)
-    async def lim_players(self, i, b): await self._limits(i, "players")
+    async def _limits_item(self, i: discord.Interaction, item_id):
+        item = get_shop().get(item_id)
+        if not item:
+            return await i.response.edit_message(content="❌ Товар уже удалён.", view=None)
+        await i.response.send_modal(LimitsModal(item_id, item, self))
 
-    @discord.ui.button(label="Лимиты: персонал", emoji="⚙️", style=discord.ButtonStyle.primary, row=2)
-    async def lim_staff(self, i, b): await self._limits(i, "staff")
+    @discord.ui.button(label="Добавить", emoji="➕", style=discord.ButtonStyle.success, row=0)
+    async def add_btn(self, i, b):
+        await i.response.send_message("В какую категорию добавить товар?", view=AdminCategoryView(self._add_to), ephemeral=True)
 
-    @discord.ui.button(label="Изменить: игроки", emoji="✏️", style=discord.ButtonStyle.primary, row=3)
-    async def edit_players(self, i, b): await self._edit(i, "players")
+    @discord.ui.button(label="Изменить", emoji="✏️", style=discord.ButtonStyle.primary, row=0)
+    async def edit_btn(self, i, b):
+        await i.response.send_message("В какой категории товар?", view=AdminCategoryView(self._edit_cat), ephemeral=True)
 
-    @discord.ui.button(label="Изменить: персонал", emoji="✏️", style=discord.ButtonStyle.primary, row=3)
-    async def edit_staff(self, i, b): await self._edit(i, "staff")
+    @discord.ui.button(label="Удалить", emoji="🗑", style=discord.ButtonStyle.danger, row=0)
+    async def remove_btn(self, i, b):
+        await i.response.send_message("В какой категории товар?", view=AdminCategoryView(self._remove_cat), ephemeral=True)
 
-    @discord.ui.button(label="Обновить", emoji="🔄", style=discord.ButtonStyle.secondary, row=4)
+    @discord.ui.button(label="Лимиты", emoji="⚙️", style=discord.ButtonStyle.primary, row=1)
+    async def limits_btn(self, i, b):
+        await i.response.send_message("В какой категории товар?", view=AdminCategoryView(self._limits_cat), ephemeral=True)
+
+    @discord.ui.button(label="Обновить", emoji="🔄", style=discord.ButtonStyle.secondary, row=1)
     async def reload(self, i: discord.Interaction, b):
         await i.response.edit_message(embed=build_admin_embed(), view=self)
 
@@ -827,9 +886,8 @@ class ShopCog(commands.Cog):
     @app_commands.command(name="shop", description="Магазин")
     @app_commands.guild_only()
     async def shop_cmd(self, inter: discord.Interaction):
-        start = allowed_shops(inter.user)[0]
-        view = ShopView(inter, start)
-        await inter.response.send_message(embed=build_shop_embed(inter.user, start), view=view, ephemeral=True)
+        view = ShopView(inter, allowed_categories(inter.user)[0])
+        await inter.response.send_message(view=view, ephemeral=True)
 
     @app_commands.command(name="orders", description="Ваши заказы из магазина")
     async def orders_cmd(self, inter: discord.Interaction):
